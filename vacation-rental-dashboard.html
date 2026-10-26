@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vacation Rental Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+body{font-family:'Inter',sans-serif}
+.hide-scroll::-webkit-scrollbar{display:none}.hide-scroll{scrollbar-width:none}
+.pill-start{border-radius:4px 0 0 4px;margin-left:4px}.pill-end{border-radius:0 4px 4px 0;margin-right:4px}
+.pill-full{border-radius:4px;margin:0 4px}.pill-middle{border-radius:0}
+.conflict{outline:2px solid #facc15;outline-offset:-2px}
+</style>
+</head>
+<body class="bg-white text-slate-800 h-screen overflow-hidden flex">
+
+<!-- SIDEBAR -->
+<div class="w-20 md:w-72 border-r border-slate-200 bg-slate-50 flex flex-col flex-shrink-0">
+  <div class="p-4 border-b border-slate-200 flex items-center justify-center md:justify-start">
+    <i class="fa-solid fa-house text-[#FF5A5F] text-xl"></i>
+    <span class="font-bold text-lg ml-3 hidden md:block">Properties</span>
+  </div>
+  <div id="listings" class="flex-1 overflow-y-auto p-3 space-y-2 hide-scroll"></div>
+  <div class="p-4 border-t border-slate-200">
+    <button onclick="openListing()" class="w-full flex items-center justify-center md:justify-start space-x-3 p-2 rounded-xl border border-dashed border-slate-300 text-slate-600 hover:bg-slate-200">
+      <i class="fa-solid fa-plus"></i><span class="hidden md:block text-sm font-medium">Add listing</span>
+    </button>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="flex-1 flex flex-col min-w-0">
+  <header class="h-16 border-b border-slate-200 px-4 md:px-6 flex items-center justify-between flex-shrink-0">
+    <div class="flex items-center space-x-2">
+      <h2 id="month" class="text-lg md:text-2xl font-bold w-44">Month</h2>
+      <button onclick="changeMonth(-1)" class="p-2 rounded-full hover:bg-slate-100"><i class="fa-solid fa-chevron-left"></i></button>
+      <button onclick="changeMonth(1)" class="p-2 rounded-full hover:bg-slate-100"><i class="fa-solid fa-chevron-right"></i></button>
+      <button onclick="goToday()" class="text-sm px-3 py-1 rounded-lg border border-slate-200 hover:bg-slate-100">Today</button>
+    </div>
+    <div class="flex items-center space-x-2">
+      <span id="sync" class="text-xs md:text-sm text-slate-500"></span>
+      <button onclick="syncNow()" title="Sync now" class="p-2 rounded-lg hover:bg-slate-100"><i id="sync-icon" class="fa-solid fa-rotate"></i></button>
+      <button onclick="openListing(selectedId)" title="Edit property" class="p-2 rounded-lg hover:bg-slate-100"><i class="fa-solid fa-gear"></i></button>
+      <button id="add-booking" onclick="openModal('booking-modal')" class="px-3 py-2 bg-slate-900 text-white text-sm font-medium rounded-lg hover:bg-slate-800 disabled:opacity-50">
+        <i class="fa-solid fa-plus md:mr-2"></i><span class="hidden md:inline">Add booking</span>
+      </button>
+    </div>
+  </header>
+
+  <div id="error" class="hidden bg-red-50 text-red-600 p-2 text-sm text-center border-b border-red-100"></div>
+  <div id="conflicts" class="hidden bg-yellow-50 text-yellow-800 p-2 text-sm text-center border-b border-yellow-200"></div>
+
+  <div class="flex-1 flex flex-col overflow-auto bg-slate-50 p-2 md:p-6">
+    <div id="empty" class="flex-1 flex flex-col items-center justify-center text-slate-400">
+      <i class="fa-regular fa-calendar-days text-6xl mb-4 opacity-50"></i>
+      <p class="text-lg font-medium text-slate-600">No property selected</p>
+      <p class="text-sm">Add a property on the left to see its calendar.</p>
+    </div>
+    <div id="cal" class="hidden flex-1 bg-white border border-slate-200 rounded-2xl shadow-sm flex-col min-w-[500px] overflow-hidden">
+      <div class="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
+        <div class="p-2 text-center text-xs font-semibold text-slate-500">Sun</div><div class="p-2 text-center text-xs font-semibold text-slate-500">Mon</div><div class="p-2 text-center text-xs font-semibold text-slate-500">Tue</div><div class="p-2 text-center text-xs font-semibold text-slate-500">Wed</div><div class="p-2 text-center text-xs font-semibold text-slate-500">Thu</div><div class="p-2 text-center text-xs font-semibold text-slate-500">Fri</div><div class="p-2 text-center text-xs font-semibold text-slate-500">Sat</div>
+      </div>
+      <div id="grid" class="grid grid-cols-7 flex-1 auto-rows-fr"></div>
+    </div>
+    <div class="flex flex-wrap gap-4 text-xs text-slate-500 mt-3 px-1">
+      <span><i class="fa-solid fa-square text-[#FF5A5F]"></i> Airbnb</span>
+      <span><i class="fa-solid fa-square text-[#003580]"></i> Booking.com</span>
+      <span><i class="fa-solid fa-square text-emerald-600"></i> Direct / manual</span>
+      <span><i class="fa-solid fa-square text-slate-400"></i> Blocked</span>
+      <span><i class="fa-solid fa-square text-yellow-400"></i> Double-booking</span>
+    </div>
+  </div>
+</div>
+
+<!-- LISTING MODAL -->
+<div id="listing-modal" class="hidden fixed inset-0 bg-slate-900/40 items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden">
+    <div class="p-4 border-b flex justify-between items-center"><h3 id="listing-title" class="font-bold text-lg">Add property</h3>
+      <button onclick="closeModal('listing-modal')" class="text-slate-400"><i class="fa-solid fa-xmark text-xl"></i></button></div>
+    <form id="listing-form" class="p-6 space-y-4">
+      <div><label class="block text-sm font-medium mb-1">Listing name *</label>
+        <input id="l-name" required class="w-full border border-slate-300 rounded-lg p-2.5" placeholder="e.g. Villa Bali"></div>
+      <div><label class="block text-sm font-medium mb-1">Airbnb iCal URL</label>
+        <input id="l-airbnb" type="url" class="w-full border border-slate-300 rounded-lg p-2.5 text-sm"></div>
+      <div><label class="block text-sm font-medium mb-1">Booking.com iCal URL</label>
+        <input id="l-booking" type="url" class="w-full border border-slate-300 rounded-lg p-2.5 text-sm"></div>
+      <div class="pt-2 flex justify-between">
+        <button type="button" id="l-delete" onclick="deleteListing()" class="hidden px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg">Delete property</button>
+        <div class="flex space-x-3 ml-auto">
+          <button type="button" onclick="closeModal('listing-modal')" class="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+          <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Save property</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- BOOKING MODAL -->
+<div id="booking-modal" class="hidden fixed inset-0 bg-slate-900/40 items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+    <div class="p-4 border-b flex justify-between items-center"><h3 class="font-bold text-lg">Add manual booking</h3>
+      <button onclick="closeModal('booking-modal')" class="text-slate-400"><i class="fa-solid fa-xmark text-xl"></i></button></div>
+    <form id="booking-form" class="p-6 space-y-4">
+      <select id="b-platform" class="w-full border border-slate-300 rounded-lg p-2.5 bg-white">
+        <option value="Direct">Direct booking</option><option value="Airbnb">Airbnb (manual)</option>
+        <option value="Booking.com">Booking.com (manual)</option><option value="Other">Other</option></select>
+      <input id="b-name" required class="w-full border border-slate-300 rounded-lg p-2.5" placeholder="Guest name *">
+      <div class="grid grid-cols-2 gap-4">
+        <div><label class="block text-sm font-medium mb-1">Check-in *</label><input type="date" id="b-start" required class="w-full border border-slate-300 rounded-lg p-2 text-sm"></div>
+        <div><label class="block text-sm font-medium mb-1">Check-out *</label><input type="date" id="b-end" required class="w-full border border-slate-300 rounded-lg p-2 text-sm"></div>
+      </div>
+      <div class="grid grid-cols-2 gap-4 items-end">
+        <div><label class="block text-sm font-medium mb-1">Guests *</label><input type="number" id="b-guests" min="1" value="1" required class="w-full border border-slate-300 rounded-lg p-2"></div>
+        <label class="flex items-center space-x-2 pb-2"><input type="checkbox" id="b-bed" class="w-5 h-5"><span class="text-sm font-medium">Needs extra bed</span></label>
+      </div>
+      <div class="pt-2 flex justify-end space-x-3">
+        <button type="button" onclick="closeModal('booking-modal')" class="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
+        <button type="submit" class="px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800">Save booking</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- VIEW MODAL -->
+<div id="view-modal" class="hidden fixed inset-0 bg-slate-900/40 items-center justify-center z-50 p-4">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+    <div id="v-head" class="p-4 text-white flex justify-between items-start">
+      <div><h3 id="v-name" class="text-xl font-bold mb-1"></h3><span id="v-platform" class="bg-white/20 px-2 py-1 rounded text-xs font-semibold"></span></div>
+      <button onclick="closeModal('view-modal')" class="text-white/70 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
+    </div>
+    <div class="p-6 space-y-4">
+      <div class="grid grid-cols-2 gap-4">
+        <div class="bg-slate-50 p-3 rounded-xl"><p class="text-xs text-slate-500 font-semibold">Check-in</p><p id="v-start" class="font-bold mt-1"></p></div>
+        <div class="bg-slate-50 p-3 rounded-xl"><p class="text-xs text-slate-500 font-semibold">Check-out</p><p id="v-end" class="font-bold mt-1"></p></div>
+      </div>
+      <div class="flex justify-between text-slate-700">
+        <span><i class="fa-solid fa-user-group text-slate-400 mr-2"></i><span id="v-guests"></span> guests</span>
+        <span id="v-bed" class="hidden text-amber-600 bg-amber-50 px-3 py-1 rounded-full text-sm"><i class="fa-solid fa-bed mr-1"></i>Extra bed</span>
+      </div>
+      <div id="v-conflict" class="hidden text-sm text-yellow-800 bg-yellow-50 p-3 rounded-lg border border-yellow-200">This stay overlaps a reservation from another platform.</div>
+      <p id="v-ical" class="hidden text-sm text-slate-500 bg-blue-50 p-3 rounded-lg">Synced from iCal. Edit it on the source platform.</p>
+      <button id="v-delete" class="hidden w-full py-2.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg font-bold"><i class="fa-solid fa-trash-can mr-2"></i>Delete manual booking</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- Storage (localStorage, works offline) ----------
+const DEFAULT_LISTINGS = [{
+  id: 'default-1', name: 'My Property',
+  airbnbUrl: 'https://www.airbnb.com/calendar/ical/781598989631669465.ics?t=b49fb82cb989456dbf3528b66cfca1cc',
+  bookingUrl: 'https://ical.booking.com/v1/export?t=234d19b8-900c-4af0-85ef-0a1998ae2e8e'
+}];
+const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch (e) { return d; } };
+const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+
+let listings = load('vr_listings', DEFAULT_LISTINGS);
+let manual = load('vr_manual', []);
+let selectedId = listings[0]?.id || null;
+let editingId = null, current = new Date(), ical = [], viewing = null, syncing = false;
+const $ = id => document.getElementById(id);
+const PROXIES = [
+  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+  u => 'https://corsproxy.io/?' + encodeURIComponent(u),
+  u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u)
+];
+
+// ---------- iCal ----------
+const parseDate = s => { const m = (s || '').match(/^(\d{4})(\d{2})(\d{2})/); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+const day = d => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+function parseIcal(text, platform) {
+  const lines = text.replace(/\r?\n[ \t]/g, '').split(/\r\n|\n|\r/);
+  const out = []; let ev = null;
+  for (const line of lines) {
+    if (line === 'BEGIN:VEVENT') ev = { platform, isManual: false, guests: '?', extraBed: false };
+    else if (line === 'END:VEVENT') {
+      if (ev && ev.start && ev.end) {
+        const s = (ev.summary || '').toLowerCase();
+        ev.blocked = /not available|blocked|closed/.test(s);
+        if (ev.blocked) ev.summary = 'Blocked';
+        else ev.summary = (ev.summary || 'Reserved').replace(/^Reserved - /, '');
+        out.push(ev);
+      }
+      ev = null;
+    } else if (ev) {
+      const i = line.indexOf(':'), key = line.slice(0, i).split(';')[0], val = line.slice(i + 1);
+      if (key === 'DTSTART') ev.start = parseDate(val);
+      else if (key === 'DTEND') ev.end = parseDate(val);
+      else if (key === 'SUMMARY') ev.summary = val;
+      else if (key === 'UID') ev.uid = val;
+    }
+  }
+  return out;
+}
+
+async function fetchFeed(url) {
+  let lastErr;
+  for (const p of PROXIES) {
+    try {
+      const r = await fetch(p(url));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const t = await r.text();
+      if (!t.includes('BEGIN:VCALENDAR')) throw new Error('Not a calendar');
+      return t;
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
+async function syncNow() {
+  const l = listings.find(x => x.id === selectedId);
+  if (!l || syncing) return;
+  syncing = true; $('sync-icon').classList.add('fa-spin'); $('sync').textContent = 'Syncing…';
+  const feeds = [['Airbnb', l.airbnbUrl], ['Booking.com', l.bookingUrl]].filter(f => f[1] && f[1].trim());
+  const results = await Promise.allSettled(feeds.map(async ([p, u]) => parseIcal(await fetchFeed(u), p)));
+  const events = [], failed = [];
+  results.forEach((r, i) => r.status === 'fulfilled' ? events.push(...r.value) : failed.push(feeds[i][0]));
+  if (failed.length) showError('Could not sync ' + failed.join(' and ') + '. Check the URL or try again in a minute.');
+  if (events.length || !failed.length) ical = events;
+  syncing = false; $('sync-icon').classList.remove('fa-spin');
+  $('sync').textContent = 'Synced ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  render();
+}
+
+// ---------- Rendering ----------
+const color = b => b.blocked ? 'bg-slate-400 text-white' : b.platform === 'Airbnb' ? 'bg-[#FF5A5F] text-white' : b.platform === 'Booking.com' ? 'bg-[#003580] text-white' : 'bg-emerald-600 text-white';
+const esc = s => (s || '').toString().replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function allBookings() {
+  const mine = manual.filter(b => b.listingId === selectedId).map(b => ({
+    id: b.id, platform: b.platform, summary: b.guestName, start: parseDate(b.start.replace(/-/g, '')),
+    end: parseDate(b.end.replace(/-/g, '')), guests: b.guests, extraBed: b.extraBed, isManual: true
+  }));
+  const list = [...ical, ...mine].sort((a, b) => a.start - b.start);
+  // double-booking: real stays from different sources that overlap
+  const real = list.filter(b => !b.blocked);
+  real.forEach(a => a.conflict = real.some(b => b !== a && b.platform !== a.platform && a.start < b.end && b.start < a.end));
+  return list;
+}
+
+function render() { renderSidebar(); renderCalendar(); }
+
+function renderSidebar() {
+  $('listings').innerHTML = '';
+  listings.forEach(l => {
+    const sel = l.id === selectedId, b = document.createElement('button');
+    b.onclick = () => { selectedId = l.id; ical = []; render(); syncNow(); };
+    b.className = 'w-full flex items-center space-x-3 p-2 rounded-xl ' + (sel ? 'bg-white shadow-sm ring-1 ring-slate-200' : 'hover:bg-slate-200 opacity-70');
+    b.innerHTML = `<div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${sel ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-200 text-slate-500'}"><i class="fa-solid fa-location-dot"></i></div>
+      <div class="hidden md:block text-left truncate min-w-0"><p class="font-semibold text-sm truncate">${esc(l.name)}</p><p class="text-xs text-slate-500">${[l.airbnbUrl && 'Airbnb', l.bookingUrl && 'Booking.com'].filter(Boolean).join(' + ') || 'Manual only'}</p></div>`;
+    $('listings').appendChild(b);
+  });
+}
+
+function renderCalendar() {
+  $('month').textContent = current.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const has = !!selectedId;
+  $('empty').classList.toggle('hidden', has);
+  $('cal').classList.toggle('hidden', !has); $('cal').classList.toggle('flex', has);
+  $('add-booking').disabled = !has;
+  if (!has) return;
+
+  const y = current.getFullYear(), m = current.getMonth();
+  const first = new Date(y, m, 1), last = new Date(y, m + 1, 0), days = [];
+  for (let i = first.getDay(); i > 0; i--) days.push([new Date(y, m, 1 - i), false]);
+  for (let i = 1; i <= last.getDate(); i++) days.push([new Date(y, m, i), true]);
+  for (let i = 1; i < 7 - last.getDay(); i++) days.push([new Date(y, m + 1, i), false]);
+
+  const bookings = allBookings(), today = day(new Date());
+  const nConf = bookings.filter(b => b.conflict).length;
+  $('conflicts').textContent = nConf ? `Warning: ${nConf} reservations overlap across platforms. They are outlined in yellow.` : '';
+  $('conflicts').classList.toggle('hidden', !nConf);
+
+  $('grid').innerHTML = '';
+  days.forEach(([d, inMonth], i) => {
+    const ds = day(d), cell = document.createElement('div');
+    cell.className = `min-h-[100px] border-b border-r border-slate-100 p-1 overflow-y-auto ${inMonth ? 'bg-white' : 'bg-slate-50 text-slate-400'}`;
+    cell.innerHTML = `<span class="inline-flex w-7 h-7 items-center justify-center rounded-full text-sm font-medium mb-1 ${ds.getTime() === today.getTime() ? 'bg-indigo-600 text-white' : ''}">${d.getDate()}</span>`;
+    const wrap = document.createElement('div'); wrap.className = 'space-y-1';
+    bookings.filter(b => ds >= day(b.start) && ds < day(b.end)).forEach(b => {
+      const isStart = ds.getTime() === day(b.start).getTime(), isEnd = ds.getTime() === day(b.end).getTime() - 86400000;
+      const shape = isStart && isEnd ? 'pill-full' : isStart ? 'pill-start' : isEnd ? 'pill-end' : 'pill-middle';
+      const p = document.createElement('div');
+      p.className = `cursor-pointer px-1 md:px-2 py-1 text-[10px] md:text-[11px] font-semibold truncate ${color(b)} ${shape} ${b.conflict ? 'conflict' : ''}`;
+      p.title = b.summary;
+      p.textContent = (isStart || i % 7 === 0) ? (b.conflict ? '⚠ ' : '') + b.summary : '\u00a0';
+      p.onclick = () => showBooking(b);
+      wrap.appendChild(p);
+    });
+    cell.appendChild(wrap); $('grid').appendChild(cell);
+  });
+}
+
+// ---------- Modals ----------
+const openModal = id => { $(id).classList.remove('hidden'); $(id).classList.add('flex'); };
+const closeModal = id => { $(id).classList.add('hidden'); $(id).classList.remove('flex'); };
+const changeMonth = n => { current = new Date(current.getFullYear(), current.getMonth() + n, 1); renderCalendar(); };
+const goToday = () => { current = new Date(); renderCalendar(); };
+
+function openListing(id) {
+  const l = listings.find(x => x.id === id);
+  editingId = l ? l.id : null;
+  $('listing-title').textContent = l ? 'Edit property' : 'Add property';
+  $('l-name').value = l?.name || ''; $('l-airbnb').value = l?.airbnbUrl || ''; $('l-booking').value = l?.bookingUrl || '';
+  $('l-delete').classList.toggle('hidden', !l);
+  openModal('listing-modal');
+}
+
+function showBooking(b) {
+  viewing = b;
+  $('v-name').textContent = b.summary; $('v-platform').textContent = b.blocked ? 'Blocked' : b.platform;
+  $('v-head').className = 'p-4 text-white flex justify-between items-start ' + color(b).split(' ')[0];
+  $('v-start').textContent = b.start.toLocaleDateString(); $('v-end').textContent = b.end.toLocaleDateString();
+  $('v-guests').textContent = b.guests;
+  $('v-bed').classList.toggle('hidden', !b.extraBed);
+  $('v-conflict').classList.toggle('hidden', !b.conflict);
+  $('v-ical').classList.toggle('hidden', b.isManual);
+  $('v-delete').classList.toggle('hidden', !b.isManual);
+  openModal('view-modal');
+}
+
+$('listing-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const data = { name: $('l-name').value.trim(), airbnbUrl: $('l-airbnb').value.trim(), bookingUrl: $('l-booking').value.trim() };
+  if (editingId) Object.assign(listings.find(x => x.id === editingId), data);
+  else { const l = { id: 'l' + Date.now(), ...data }; listings.push(l); selectedId = l.id; }
+  save('vr_listings', listings); closeModal('listing-modal'); ical = []; render(); syncNow();
+});
+
+function deleteListing() {
+  if (!editingId || !confirm('Delete this property and its manual bookings?')) return;
+  listings = listings.filter(l => l.id !== editingId);
+  manual = manual.filter(b => b.listingId !== editingId);
+  save('vr_listings', listings); save('vr_manual', manual);
+  selectedId = listings[0]?.id || null; ical = []; closeModal('listing-modal'); render(); if (selectedId) syncNow();
+}
+
+$('booking-form').addEventListener('submit', e => {
+  e.preventDefault();
+  if ($('b-end').value <= $('b-start').value) return showError('Check-out must be after check-in.');
+  manual.push({ id: 'b' + Date.now(), listingId: selectedId, platform: $('b-platform').value, guestName: $('b-name').value.trim(),
+    start: $('b-start').value, end: $('b-end').value, guests: parseInt($('b-guests').value) || 1, extraBed: $('b-bed').checked });
+  save('vr_manual', manual); closeModal('booking-modal'); $('booking-form').reset(); renderCalendar();
+});
+
+$('v-delete').addEventListener('click', () => {
+  manual = manual.filter(b => b.id !== viewing.id);
+  save('vr_manual', manual); closeModal('view-modal'); renderCalendar();
+});
+
+function showError(msg) {
+  $('error').textContent = msg; $('error').classList.remove('hidden');
+  setTimeout(() => $('error').classList.add('hidden'), 6000);
+}
+
+// ---------- Start ----------
+render();
+if (selectedId) syncNow();
+setInterval(() => { if (selectedId) syncNow(); }, 10 * 60 * 1000); // auto-refresh every 10 min
+</script>
+</body>
+</html>
