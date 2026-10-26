@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vacation Rental Dashboard</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        /* Custom scrollbar for day cells */
+        .day-cell::-webkit-scrollbar { width: 4px; }
+        .day-cell::-webkit-scrollbar-track { background: transparent; }
+        .day-cell::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .hide-scroll::-webkit-scrollbar { display: none; }
+        .hide-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+        /* Pill shapes */
+        .pill-start { border-top-left-radius: 4px; border-bottom-left-radius: 4px; margin-left: 4px; }
+        .pill-end { border-top-right-radius: 4px; border-bottom-right-radius: 4px; margin-right: 4px; }
+        .pill-full { border-radius: 4px; margin: 0 4px; }
+        .pill-middle { border-radius: 0; }
+    </style>
+</head>
+<body class="bg-white text-slate-800 h-screen overflow-hidden flex">
+
+    <!-- LEFT SIDEBAR -->
+    <div class="w-20 md:w-72 border-r border-slate-200 bg-slate-50 flex flex-col flex-shrink-0 transition-all">
+        <div class="p-4 border-b border-slate-200 flex items-center justify-center md:justify-start">
+            <i class="fa-solid fa-house text-[#FF5A5F] text-xl"></i>
+            <span class="font-bold text-lg ml-3 hidden md:block text-slate-800">Properties</span>
+        </div>
+        
+        <div id="listings-container" class="flex-1 overflow-y-auto p-3 space-y-2 hide-scroll">
+            <!-- Listings will be injected here via JS -->
+            <div class="text-center text-slate-400 text-sm mt-4 hidden md:block" id="empty-listings-msg">
+                No properties yet.
+            </div>
+        </div>
+
+        <div class="p-4 border-t border-slate-200">
+            <button onclick="openModal('listing-modal')" class="w-full flex items-center justify-center md:justify-start space-x-3 p-2 rounded-xl border border-dashed border-slate-300 text-slate-600 hover:bg-slate-200 transition-colors">
+                <i class="fa-solid fa-plus"></i>
+                <span class="hidden md:block text-sm font-medium">Add Listing</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <div class="flex-1 flex flex-col min-w-0 bg-white">
+        <!-- Header -->
+        <header class="h-16 border-b border-slate-200 px-4 md:px-6 flex items-center justify-between flex-shrink-0">
+            <div class="flex items-center space-x-2 md:space-x-4">
+                <h2 id="current-month-display" class="text-lg md:text-2xl font-bold w-40">Month Year</h2>
+                <div class="flex space-x-1">
+                    <button onclick="changeMonth(-1)" class="p-2 rounded-full hover:bg-slate-100 text-slate-600"><i class="fa-solid fa-chevron-left"></i></button>
+                    <button onclick="changeMonth(1)" class="p-2 rounded-full hover:bg-slate-100 text-slate-600"><i class="fa-solid fa-chevron-right"></i></button>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-4">
+                <span id="sync-status" class="hidden items-center text-sm text-slate-500 bg-slate-50 px-3 py-1 rounded-full border border-slate-200">
+                    <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Syncing...
+                </span>
+                <button id="add-booking-btn" onclick="openModal('booking-modal')" disabled class="flex items-center px-3 py-2 md:px-4 md:py-2 bg-slate-900 text-white text-sm font-medium rounded-lg hover:bg-slate-800 disabled:opacity-50 transition-colors">
+                    <i class="fa-solid fa-plus md:mr-2"></i> <span class="hidden md:inline">Add Booking</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Error Banner -->
+        <div id="error-banner" class="hidden bg-red-50 text-red-600 p-2 text-sm text-center border-b border-red-100 justify-center items-center">
+            <i class="fa-solid fa-circle-exclamation mr-2"></i> <span id="error-message"></span>
+        </div>
+
+        <!-- Calendar Container -->
+        <div class="flex-1 flex flex-col overflow-auto bg-slate-50 p-2 md:p-6">
+            <div id="empty-state" class="flex-1 flex flex-col items-center justify-center text-slate-400">
+                <i class="fa-regular fa-calendar-days text-6xl mb-4 opacity-50"></i>
+                <p class="text-lg font-medium text-slate-600">No property selected</p>
+                <p class="text-sm text-center">Select or create a property on the left to view the calendar.</p>
+            </div>
+
+            <div id="calendar-view" class="hidden flex-1 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col min-w-[500px] overflow-hidden">
+                <!-- Days of Week -->
+                <div class="grid grid-cols-7 border-b border-slate-200 flex-shrink-0 bg-slate-50">
+                    <div class="p-2 md:p-3 text-center text-[10px] md:text-xs font-semibold text-slate-500 uppercase tracking-wider">Sun</div>
+                    <div class="p-2 md:p-3 text-center text-[10px] md:text-xs font-semibold text-slate-500 uppercase tracking-wider">Mon</div>
+                    <div class="p-2 md:p-3 text-center text-[10px] md:text-xs font-semibold text-slate-500 uppercase tracking-wider">Tue</div>
+                    <div class="p-2 md:p-3 text-center text-[10px] md:text-xs font-semibold text-slate-500 uppercase tracking-wider">Wed</div>
+                    <div class="p-2 md:p-3 text-center text-[10px] md:text-xs font-semibold text-slate-500 uppercase tracking-wider">Thu</div>
+                    <div class="p-2 md:p-3 text-center text-[10px] md:text-xs font-semibold text-slate-500 uppercase tracking-wider">Fri</div>
+                    <div class="p-2 md:p-3 text-center text-[10px] md:text-xs font-semibold text-slate-500 uppercase tracking-wider">Sat</div>
+                </div>
+                
+                <!-- Calendar Grid -->
+                <div id="calendar-grid" class="grid grid-cols-7 flex-1 auto-rows-fr">
+                    <!-- Days injected via JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODALS -->
+
+    <!-- Add Listing Modal -->
+    <div id="listing-modal" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden scale-95 transition-transform duration-200" id="listing-modal-content">
+            <div class="p-4 border-b border-slate-200 flex justify-between items-center">
+                <h3 class="font-bold text-lg">Add New Property</h3>
+                <button onclick="closeModal('listing-modal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+            <form id="listing-form" class="p-6 space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Listing Name *</label>
+                    <input type="text" id="listing-name" required class="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="e.g. Villa Bali">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Airbnb iCal URL (Optional)</label>
+                    <input type="url" id="listing-airbnb" class="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-indigo-500 text-sm" placeholder="https://www.airbnb.com/calendar/ical/...">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Booking.com iCal URL (Optional)</label>
+                    <input type="url" id="listing-booking" class="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-indigo-500 text-sm" placeholder="https://ical.booking.com/v1/export...">
+                </div>
+                <div class="pt-4 flex justify-end space-x-3">
+                    <button type="button" onclick="closeModal('listing-modal')" class="px-4 py-2 text-slate-600 font-medium hover:bg-slate-100 rounded-lg">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 flex items-center">
+                        <i class="fa-solid fa-floppy-disk mr-2"></i> Save Property
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Add Booking Modal -->
+    <div id="booking-modal" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden scale-95 transition-transform duration-200" id="booking-modal-content">
+            <div class="p-4 border-b border-slate-200 flex justify-between items-center">
+                <h3 class="font-bold text-lg">Add Manual Booking</h3>
+                <button onclick="closeModal('booking-modal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+            <form id="booking-form" class="p-6 space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Platform / Source</label>
+                    <select id="booking-platform" class="w-full border border-slate-300 rounded-lg p-2.5 outline-none bg-white focus:ring-2 focus:ring-indigo-500">
+                        <option value="Direct">Direct Booking</option>
+                        <option value="Airbnb">Airbnb (Manual)</option>
+                        <option value="Booking.com">Booking.com (Manual)</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Guest Name *</label>
+                    <input type="text" id="booking-name" required class="w-full border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="e.g. John Doe">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Check-in *</label>
+                        <input type="date" id="booking-start" required class="w-full border border-slate-300 rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Check-out *</label>
+                        <input type="date" id="booking-end" required class="w-full border border-slate-300 rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-4 items-center">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Total Guests *</label>
+                        <input type="number" id="booking-guests" min="1" value="1" required class="w-full border border-slate-300 rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+                    <div class="flex items-center h-full pt-6">
+                        <label class="flex items-center space-x-2 cursor-pointer">
+                            <input type="checkbox" id="booking-extra-bed" class="w-5 h-5 text-indigo-600 rounded border-slate-300">
+                            <span class="text-sm font-medium text-slate-700">Needs Extra Bed</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="pt-4 flex justify-end space-x-3">
+                    <button type="button" onclick="closeModal('booking-modal')" class="px-4 py-2 text-slate-600 font-medium hover:bg-slate-100 rounded-lg">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 flex items-center">
+                        <i class="fa-solid fa-check mr-2"></i> Save Booking
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- View/Edit Booking Modal -->
+    <div id="view-modal" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden scale-95 transition-transform duration-200" id="view-modal-content">
+            <div id="view-modal-header" class="p-4 text-white flex justify-between items-start bg-emerald-600">
+                <div>
+                    <h3 id="view-name" class="text-xl font-bold mb-1">Guest Booking</h3>
+                    <span id="view-platform" class="inline-block bg-white/20 px-2 py-1 rounded text-[10px] font-semibold uppercase tracking-wider">Platform</span>
+                </div>
+                <button onclick="closeModal('view-modal')" class="text-white/70 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+            
+            <div class="p-6 space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                        <p class="text-xs text-slate-500 font-semibold uppercase">Check-in</p>
+                        <p id="view-start" class="font-bold text-slate-800 mt-1"></p>
+                    </div>
+                    <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                        <p class="text-xs text-slate-500 font-semibold uppercase">Check-out</p>
+                        <p id="view-end" class="font-bold text-slate-800 mt-1"></p>
+                    </div>
+                </div>
+                
+                <div class="flex items-center justify-between border-t border-slate-100 pt-4">
+                    <div class="flex items-center text-slate-700">
+                        <i class="fa-solid fa-user-group text-slate-400 w-6"></i>
+                        <span class="font-medium"><span id="view-guests"></span> Guests</span>
+                    </div>
+                    <div id="view-extra-bed" class="hidden items-center text-amber-600 bg-amber-50 px-3 py-1 rounded-full text-sm font-medium">
+                        <i class="fa-solid fa-bed mr-1.5"></i> Extra Bed
+                    </div>
+                </div>
+
+                <div id="view-ical-notice" class="hidden items-start text-sm text-slate-500 bg-blue-50 p-3 rounded-lg border border-blue-100 mt-4">
+                    <i class="fa-solid fa-circle-info mt-0.5 text-blue-500 mr-2"></i>
+                    <p>This booking is synced automatically via iCal. To edit guests or extra beds, update it on the source platform.</p>
+                </div>
+
+                <div id="view-delete-container" class="hidden pt-4 border-t border-slate-100 mt-4">
+                    <button id="btn-delete-booking" class="w-full flex justify-center items-center py-2.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors text-sm font-bold">
+                        <i class="fa-solid fa-trash-can mr-2"></i> Delete Manual Booking
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- FIREBASE & APP LOGIC -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, doc, deleteDoc, addDoc, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Configuration ---
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const isMock = Object.keys(firebaseConfig).length === 0;
+        const app = !isMock ? initializeApp(firebaseConfig) : { name: 'mock' };
+        const auth = !isMock ? getAuth(app) : null;
+        const db = !isMock ? getFirestore(app) : null;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-rental-app';
+
+        // --- Application State ---
+        const state = {
+            user: null,
+            listings: [],
+            selectedListingId: null,
+            manualBookings: [],
+            icalEvents: [],
+            currentMonth: new Date(),
+            selectedBookingForView: null
+        };
+
+        // --- DOM Elements ---
+        const els = {
+            listingsContainer: document.getElementById('listings-container'),
+            emptyListingsMsg: document.getElementById('empty-listings-msg'),
+            monthDisplay: document.getElementById('current-month-display'),
+            calendarGrid: document.getElementById('calendar-grid'),
+            emptyState: document.getElementById('empty-state'),
+            calendarView: document.getElementById('calendar-view'),
+            addBookingBtn: document.getElementById('add-booking-btn'),
+            syncStatus: document.getElementById('sync-status'),
+            errorBanner: document.getElementById('error-banner'),
+            errorMessage: document.getElementById('error-message'),
+            
+            // Forms
+            listingForm: document.getElementById('listing-form'),
+            bookingForm: document.getElementById('booking-form'),
+            
+            // View Modal
+            viewName: document.getElementById('view-name'),
+            viewPlatform: document.getElementById('view-platform'),
+            viewHeader: document.getElementById('view-modal-header'),
+            viewStart: document.getElementById('view-start'),
+            viewEnd: document.getElementById('view-end'),
+            viewGuests: document.getElementById('view-guests'),
+            viewExtraBed: document.getElementById('view-extra-bed'),
+            viewIcalNotice: document.getElementById('view-ical-notice'),
+            viewDeleteContainer: document.getElementById('view-delete-container'),
+            btnDeleteBooking: document.getElementById('btn-delete-booking')
+        };
+
+        // --- Auth Setup ---
+        if (!isMock) {
+            const initAuth = async () => {
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (err) {
+                    console.error("Auth error:", err);
+                    showError("Authentication failed. Data won't save.");
+                }
+            };
+            initAuth();
+            onAuthStateChanged(auth, user => {
+                state.user = user;
+                if (user) {
+                    fetchListings();
+                    fetchManualBookings();
+                }
+            });
+        } else {
+            // Mock mode for local testing without config
+            state.user = { uid: 'mock-user' };
+            renderApp();
+        }
+
+        // --- Data Fetching (Firebase) ---
+        let unsubListings = null;
+        let unsubBookings = null;
+
+        function fetchListings() {
+            if (!db || !state.user) return;
+            const ref = collection(db, 'artifacts', appId, 'public', 'data', 'listings');
+            unsubListings = onSnapshot(ref, (snapshot) => {
+                state.listings = [];
+                snapshot.forEach(doc => state.listings.push({ id: doc.id, ...doc.data() }));
+                
+                if (state.listings.length > 0 && !state.selectedListingId) {
+                    selectListing(state.listings[0].id);
+                }
+                renderSidebar();
+            }, (error) => {
+                console.error("Error fetching listings:", error);
+            });
+        }
+
+        function fetchManualBookings() {
+            if (!db || !state.user) return;
+            const ref = collection(db, 'artifacts', appId, 'public', 'data', 'manualBookings');
+            // Note: We fetch ALL public manual bookings, then filter in JS to avoid complex compound query requirements
+            unsubBookings = onSnapshot(ref, (snapshot) => {
+                const fetched = [];
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    fetched.push({
+                        id: doc.id,
+                        uid: doc.id,
+                        listingId: data.listingId,
+                        platform: data.platform,
+                        summary: data.guestName,
+                        start: new Date(data.start),
+                        end: new Date(data.end),
+                        guests: data.guests,
+                        extraBed: data.extraBed,
+                        isManual: true
+                    });
+                });
+                state.manualBookings = fetched;
+                renderCalendar();
+            }, (error) => {
+                console.error("Error fetching bookings:", error);
+            });
+        }
+
+        // --- iCal Fetching Logic ---
+        async function fetchIcalForListing(listing) {
+            state.icalEvents = [];
+            if (!listing) return;
+
+            els.syncStatus.style.display = 'inline-flex';
+            els.errorBanner.style.display = 'none';
+            let allParsedEvents = [];
+
+            const feeds = [
+                { platform: 'Airbnb', url: listing.airbnbUrl },
+                { platform: 'Booking.com', url: listing.bookingUrl }
+            ].filter(f => f.url && f.url.trim() !== '');
+
+            try {
+                for (const feed of feeds) {
+                    // allorigins proxy for raw text bypasses CORS
+                    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(feed.url)}`;
+                    const response = await fetch(proxyUrl);
+                    if (!response.ok) throw new Error(`Failed to fetch ${feed.platform}`);
+                    
+                    const text = await response.text();
+                    const unfolded = text.replace(/\r\n\s/g, '').replace(/\n\s/g, '');
+                    const lines = unfolded.split(/\r\n|\n|\r/);
+                    
+                    let currentEvent = null;
+                    
+                    for (let line of lines) {
+                        if (line === 'BEGIN:VEVENT') {
+                            currentEvent = { platform: feed.platform, isManual: false, extraBed: false, guests: '?' };
+                        } else if (line === 'END:VEVENT') {
+                            if (currentEvent && currentEvent.start && currentEvent.end) {
+                                const summary = (currentEvent.summary || '').toLowerCase();
+                                // Ignore purely blocked dates if desired, but here we include them to prevent double booking.
+                                // But let's clean up summary titles
+                                if (currentEvent.platform === 'Airbnb' && currentEvent.summary?.startsWith('Reserved - ')) {
+                                    currentEvent.summary = currentEvent.summary.replace('Reserved - ', '');
+                                }
+                                if (summary.includes('not available')) {
+                                    currentEvent.summary = 'Blocked';
+                                }
+                                allParsedEvents.push(currentEvent);
+                            }
+                            currentEvent = null;
+                        } else if (currentEvent) {
+                            if (line.startsWith('DTSTART')) currentEvent.start = parseICalDate(line.split(':')[1]);
+                            else if (line.startsWith('DTEND')) currentEvent.end = parseICalDate(line.split(':')[1]);
+                            else if (line.startsWith('SUMMARY')) currentEvent.summary = line.substring(line.indexOf(':') + 1);
+                            else if (line.startsWith('UID')) currentEvent.uid = line.substring(line.indexOf(':') + 1);
+                        }
+                    }
+                }
+                state.icalEvents = allParsedEvents;
+            } catch (err) {
+                console.error("iCal Fetch Error:", err);
+                showError("Failed to sync some calendars. Showing cached data.");
+            } finally {
+                els.syncStatus.style.display = 'none';
+                renderCalendar();
+            }
+        }
+
+        function parseICalDate(dateStr) {
+            // Extracts Year, Month, Day reliably regardless of timezone zulu suffix
+            const match = dateStr.match(/^(\d{4})(\d{2})(\d{2})/);
+            if (match) {
+                return new Date(parseInt(match[1]), parseInt(match[2]) - 1, parseInt(match[3]));
+            }
+            return new Date();
+        }
+
+        // --- Core UI Logic ---
+        
+        window.selectListing = function(id) {
+            state.selectedListingId = id;
+            renderSidebar();
+            
+            if (id) {
+                els.emptyState.classList.add('hidden');
+                els.calendarView.classList.remove('hidden');
+                els.calendarView.classList.add('flex');
+                els.addBookingBtn.disabled = false;
+                
+                const listing = state.listings.find(l => l.id === id);
+                fetchIcalForListing(listing);
+            } else {
+                els.emptyState.classList.remove('hidden');
+                els.emptyState.classList.add('flex');
+                els.calendarView.classList.add('hidden');
+                els.calendarView.classList.remove('flex');
+                els.addBookingBtn.disabled = true;
+            }
+        }
+
+        window.changeMonth = function(offset) {
+            const current = state.currentMonth;
+            state.currentMonth = new Date(current.getFullYear(), current.getMonth() + offset, 1);
+            renderCalendar();
+        }
+
+        function renderSidebar() {
+            els.listingsContainer.innerHTML = '';
+            
+            if (state.listings.length === 0) {
+                els.emptyListingsMsg.style.display = 'block';
+                return;
+            }
+            els.emptyListingsMsg.style.display = 'none';
+
+            state.listings.forEach(listing => {
+                const isSelected = state.selectedListingId === listing.id;
+                const btn = document.createElement('button');
+                btn.onclick = () => selectListing(listing.id);
+                btn.className = `w-full flex items-center space-x-3 p-2 rounded-xl transition-all ${
+                    isSelected ? 'bg-white shadow-sm ring-1 ring-slate-200' : 'hover:bg-slate-200 opacity-70'
+                }`;
+                
+                const iconBg = isSelected ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-200 text-slate-500';
+                
+                btn.innerHTML = `
+                    <div class="w-10 h-10 md:w-12 md:h-12 rounded-lg flex items-center justify-center flex-shrink-0 ${iconBg}">
+                        <i class="fa-solid fa-location-dot"></i>
+                    </div>
+                    <div class="hidden md:block text-left truncate flex-1 min-w-0">
+                        <p class="font-semibold text-sm truncate text-slate-800">${escapeHtml(listing.name)}</p>
+                        <p class="text-xs text-slate-500">Calendar view</p>
+                    </div>
+                `;
+                els.listingsContainer.appendChild(btn);
+            });
+        }
+
+        function renderCalendar() {
+            // 1. Update Header
+            const options = { month: 'long', year: 'numeric' };
+            els.monthDisplay.textContent = state.currentMonth.toLocaleDateString('en-US', options);
+
+            // 2. Generate Days Array
+            const start = new Date(state.currentMonth.getFullYear(), state.currentMonth.getMonth(), 1);
+            const end = new Date(state.currentMonth.getFullYear(), state.currentMonth.getMonth() + 1, 0);
+            const days = [];
+            
+            const startDay = start.getDay();
+            for (let i = startDay; i > 0; i--) {
+                days.push({ date: new Date(start.getFullYear(), start.getMonth(), 1 - i), isCurrentMonth: false });
+            }
+            for (let i = 1; i <= end.getDate(); i++) {
+                days.push({ date: new Date(start.getFullYear(), start.getMonth(), i), isCurrentMonth: true });
+            }
+            const endDay = end.getDay();
+            for (let i = 1; i < 7 - endDay; i++) {
+                days.push({ date: new Date(end.getFullYear(), end.getMonth() + 1, i), isCurrentMonth: false });
+            }
+
+            // 3. Filter Bookings for Current Listing
+            const activeManuals = state.manualBookings.filter(b => b.listingId === state.selectedListingId);
+            const allBookings = [...state.icalEvents, ...activeManuals].sort((a, b) => a.start - b.start);
+
+            // 4. Render Grid
+            els.calendarGrid.innerHTML = '';
+            const today = new Date();
+
+            days.forEach((dayObj, i) => {
+                const dayStart = new Date(dayObj.date.getFullYear(), dayObj.date.getMonth(), dayObj.date.getDate());
+                
+                // Find bookings overlapping this day
+                const daysBookings = allBookings.filter(b => {
+                    const bStart = new Date(b.start.getFullYear(), b.start.getMonth(), b.start.getDate());
+                    const bEnd = new Date(b.end.getFullYear(), b.end.getMonth(), b.end.getDate());
+                    return dayStart >= bStart && dayStart < bEnd;
+                });
+
+                const cell = document.createElement('div');
+                const isEdge = i % 7 === 6 ? 'border-r-0' : '';
+                const bg = !dayObj.isCurrentMonth ? 'bg-slate-50 text-slate-400' : 'bg-white';
+                
+                cell.className = `day-cell min-h-[100px] border-b border-r border-slate-100 p-1 md:p-1.5 relative group overflow-y-auto ${bg} ${isEdge}`;
+                
+                const isToday = dayStart.getFullYear() === today.getFullYear() && dayStart.getMonth() === today.getMonth() && dayStart.getDate() === today.getDate();
+                const numClass = isToday ? 'bg-indigo-600 text-white' : '';
+
+                cell.innerHTML = `<span class="inline-flex w-6 h-6 md:w-7 md:h-7 items-center justify-center rounded-full text-xs md:text-sm font-medium mb-1 ${numClass}">${dayObj.date.getDate()}</span>`;
+                
+                const pillsContainer = document.createElement('div');
+                pillsContainer.className = 'space-y-1 mt-1';
+
+                daysBookings.forEach((b, idx) => {
+                    const bStart = new Date(b.start.getFullYear(), b.start.getMonth(), b.start.getDate());
+                    const bEnd = new Date(b.end.getFullYear(), b.end.getMonth(), b.end.getDate());
+                    
+                    const isStartDay = dayStart.getTime() === bStart.getTime();
+                    const isBeforeEndDay = dayStart.getTime() === (bEnd.getTime() - 86400000);
+                    
+                    let shapeClass = 'pill-middle w-full';
+                    if (isStartDay && isBeforeEndDay) shapeClass = 'pill-full';
+                    else if (isStartDay) shapeClass = 'pill-start';
+                    else if (isBeforeEndDay) shapeClass = 'pill-end';
+
+                    const colorClass = getPlatformColors(b.platform);
+                    
+                    const pill = document.createElement('div');
+                    pill.className = `cursor-pointer px-1 md:px-2 py-1 text-[9px] md:text-[11px] leading-tight font-semibold truncate shadow-sm transition-opacity hover:opacity-90 ${colorClass} ${shapeClass}`;
+                    pill.title = b.summary || 'Booked';
+                    // Only show text on start day or if it's the first day of the week row to keep it clean
+                    if (isStartDay || i % 7 === 0) {
+                        pill.textContent = b.summary || 'Booked';
+                    } else {
+                        pill.innerHTML = '&nbsp;'; // empty space keeps height
+                    }
+
+                    // Store reference for modal
+                    pill.onclick = () => showBookingDetails(b);
+                    pillsContainer.appendChild(pill);
+                });
+
+                cell.appendChild(pillsContainer);
+                els.calendarGrid.appendChild(cell);
+            });
+        }
+
+        function renderApp() {
+            renderSidebar();
+            renderCalendar();
+        }
+
+        // --- Modals & Interactions ---
+        
+        window.openModal = function(id) {
+            const modal = document.getElementById(id);
+            const content = document.getElementById(id + '-content');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            // Trigger animation frame for transition
+            requestAnimationFrame(() => {
+                content.classList.remove('scale-95');
+                content.classList.add('scale-100');
+            });
+        }
+
+        window.closeModal = function(id) {
+            const modal = document.getElementById(id);
+            const content = document.getElementById(id + '-content');
+            content.classList.remove('scale-100');
+            content.classList.add('scale-95');
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            }, 200);
+        }
+
+        function showBookingDetails(booking) {
+            state.selectedBookingForView = booking;
+            
+            els.viewName.textContent = booking.summary || 'Guest Booking';
+            els.viewPlatform.textContent = booking.platform;
+            
+            // Set header color based on platform
+            const colorClass = getPlatformColors(booking.platform).split(' ')[0]; // Gets the bg-[color]
+            els.viewHeader.className = `p-4 text-white flex justify-between items-start ${colorClass}`;
+
+            els.viewStart.textContent = booking.start.toLocaleDateString();
+            els.viewEnd.textContent = booking.end.toLocaleDateString();
+            els.viewGuests.textContent = booking.guests || '?';
+            
+            if (booking.extraBed) {
+                els.viewExtraBed.classList.remove('hidden');
+                els.viewExtraBed.classList.add('flex');
+            } else {
+                els.viewExtraBed.classList.add('hidden');
+                els.viewExtraBed.classList.remove('flex');
+            }
+
+            if (booking.isManual) {
+                els.viewIcalNotice.classList.add('hidden');
+                els.viewDeleteContainer.classList.remove('hidden');
+            } else {
+                els.viewIcalNotice.classList.remove('hidden');
+                els.viewDeleteContainer.classList.add('hidden');
+            }
+
+            openModal('view-modal');
+        }
+
+        // --- Forms Submit Handlers ---
+        
+        els.listingForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!state.user || !db) {
+                showError("Must be authenticated to save listings.");
+                return;
+            }
+            try {
+                const ref = collection(db, 'artifacts', appId, 'public', 'data', 'listings');
+                await addDoc(ref, {
+                    name: document.getElementById('listing-name').value,
+                    airbnbUrl: document.getElementById('listing-airbnb').value,
+                    bookingUrl: document.getElementById('listing-booking').value,
+                    createdAt: Date.now()
+                });
+                closeModal('listing-modal');
+                els.listingForm.reset();
+            } catch (err) {
+                console.error(err);
+                showError("Failed to save property.");
+            }
+        });
+
+        els.bookingForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!state.user || !db || !state.selectedListingId) return;
+            
+            try {
+                const ref = collection(db, 'artifacts', appId, 'public', 'data', 'manualBookings');
+                await addDoc(ref, {
+                    listingId: state.selectedListingId,
+                    platform: document.getElementById('booking-platform').value,
+                    guestName: document.getElementById('booking-name').value,
+                    start: document.getElementById('booking-start').value,
+                    end: document.getElementById('booking-end').value,
+                    guests: parseInt(document.getElementById('booking-guests').value) || 1,
+                    extraBed: document.getElementById('booking-extra-bed').checked,
+                    createdAt: Date.now()
+                });
+                closeModal('booking-modal');
+                els.bookingForm.reset();
+            } catch (err) {
+                console.error(err);
+                showError("Failed to save booking.");
+            }
+        });
+
+        els.btnDeleteBooking.addEventListener('click', async () => {
+            if (!state.user || !db || !state.selectedBookingForView || !state.selectedBookingForView.id) return;
+            try {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'manualBookings', state.selectedBookingForView.id));
+                closeModal('view-modal');
+                state.selectedBookingForView = null;
+            } catch (err) {
+                console.error(err);
+                showError("Failed to delete booking.");
+            }
+        });
+
+        // --- Utils ---
+        
+        function getPlatformColors(platform) {
+            if (platform === 'Airbnb') return 'bg-[#FF5A5F] text-white';
+            if (platform === 'Booking.com') return 'bg-[#003580] text-white';
+            return 'bg-emerald-600 text-white'; // Direct/Manual
+        }
+
+        function escapeHtml(unsafe) {
+            return (unsafe || '').toString()
+                 .replace(/&/g, "&amp;")
+                 .replace(/</g, "&lt;")
+                 .replace(/>/g, "&gt;")
+                 .replace(/"/g, "&quot;")
+                 .replace(/'/g, "&#039;");
+        }
+
+        function showError(msg) {
+            els.errorMessage.textContent = msg;
+            els.errorBanner.style.display = 'flex';
+            setTimeout(() => { els.errorBanner.style.display = 'none'; }, 5000);
+        }
+
+    </script>
+</body>
+</html>
