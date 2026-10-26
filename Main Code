@@ -1,0 +1,472 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, addDoc } from 'firebase/firestore';
+import { Calendar, Plus, Edit3, Trash2, Home, MessageSquare, MapPin, Clock, Loader2, Save, X } from 'lucide-react';
+
+// --- Firebase Setup ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = Object.keys(firebaseConfig).length > 0 ? initializeApp(firebaseConfig) : { name: 'mock' };
+const auth = app.name !== 'mock' ? getAuth(app) : null;
+const db = app.name !== 'mock' ? getFirestore(app) : null;
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-rental-app';
+
+// --- iCal Feeds ---
+const FEEDS = [
+  {
+    platform: 'Airbnb',
+    url: 'https://www.airbnb.com/calendar/ical/781598989631669465.ics?t=b49fb82cb989456dbf3528b66cfca1cc',
+    color: 'bg-rose-50 border-rose-500 text-rose-700',
+    badge: 'bg-rose-100 text-rose-700'
+  },
+  {
+    platform: 'Booking.com',
+    url: 'https://ical.booking.com/v1/export?t=234d19b8-900c-4af0-85ef-0a1998ae2e8e',
+    color: 'bg-blue-50 border-blue-500 text-blue-700',
+    badge: 'bg-blue-100 text-blue-700'
+  }
+];
+
+// --- Utilities ---
+const parseDateString = (dateStr) => {
+  // Extracts YYYYMMDD from DTSTART/DTEND
+  const match = dateStr.match(/(\d{4})(\d{2})(\d{2})/);
+  if (match) {
+    return new Date(parseInt(match[1]), parseInt(match[2]) - 1, parseInt(match[3]));
+  }
+  return new Date();
+};
+
+const formatDate = (date) => {
+  return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+};
+
+const calculateNights = (start, end) => {
+  const diffTime = Math.abs(end - start);
+  return Math.round(diffTime / (1000 * 60 * 60 * 24));
+};
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [icalEvents, setIcalEvents] = useState([]);
+  const [manualBookings, setManualBookings] = useState([]);
+  const [notes, setNotes] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  
+  const [showManualForm, setShowManualForm] = useState(false);
+  const [manualForm, setManualForm] = useState({ guestName: '', start: '', end: '' });
+  
+  const [editingNoteId, setEditingNoteId] = useState(null);
+  const [noteText, setNoteText] = useState('');
+
+  // 1. Initialize Firebase Auth
+  useEffect(() => {
+    if (!auth) return;
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth error:", err);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Fetch & Parse iCal Data
+  useEffect(() => {
+    const fetchIcalFeeds = async () => {
+      setLoading(true);
+      try {
+        let allEvents = [];
+        
+        for (const feed of FEEDS) {
+          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(feed.url)}`;
+          const response = await fetch(proxyUrl);
+          if (!response.ok) throw new Error(`Failed to fetch ${feed.platform} calendar`);
+          
+          const text = await response.text();
+          // Unfold lines
+          const unfolded = text.replace(/\r\n\s/g, '').replace(/\n\s/g, '');
+          const lines = unfolded.split(/\r\n|\n|\r/);
+          
+          let currentEvent = null;
+          
+          for (let line of lines) {
+            if (line === 'BEGIN:VEVENT') {
+              currentEvent = { platform: feed.platform };
+            } else if (line === 'END:VEVENT') {
+              if (currentEvent && currentEvent.start && currentEvent.end) {
+                const summary = currentEvent.summary || '';
+                const isBlocked = summary.toLowerCase().includes('not available') || summary.toLowerCase().includes('blocked');
+                
+                // Clean up Airbnb summaries (e.g., "Reserved - John Doe" -> "John Doe")
+                if (currentEvent.platform === 'Airbnb' && summary.startsWith('Reserved - ')) {
+                  currentEvent.summary = summary.replace('Reserved - ', '');
+                }
+                
+                if (!isBlocked) {
+                  allEvents.push(currentEvent);
+                }
+              }
+              currentEvent = null;
+            } else if (currentEvent) {
+              if (line.startsWith('DTSTART')) currentEvent.start = parseDateString(line);
+              else if (line.startsWith('DTEND')) currentEvent.end = parseDateString(line);
+              else if (line.startsWith('SUMMARY')) currentEvent.summary = line.substring(line.indexOf(':') + 1);
+              else if (line.startsWith('UID')) currentEvent.uid = line.substring(line.indexOf(':') + 1);
+            }
+          }
+        }
+        setIcalEvents(allEvents);
+      } catch (err) {
+        console.error("Error fetching iCal:", err);
+        setError("Could not load calendar feeds. Showing manual bookings only if available.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchIcalFeeds();
+  }, []);
+
+  // 3. Fetch Firebase Data (Manual Bookings & Notes)
+  useEffect(() => {
+    if (!user || !db) return;
+
+    // Listen to manual bookings
+    const manualRef = collection(db, 'artifacts', appId, 'public', 'data', 'manualBookings');
+    const unsubManual = onSnapshot(manualRef, 
+      (snapshot) => {
+        const bookings = [];
+        snapshot.forEach(doc => {
+          const data = doc.data();
+          bookings.push({
+            id: doc.id,
+            uid: doc.id,
+            platform: 'Manual',
+            summary: data.guestName,
+            start: new Date(data.start),
+            end: new Date(data.end)
+          });
+        });
+        setManualBookings(bookings);
+      },
+      (err) => console.error("Error fetching manual bookings:", err)
+    );
+
+    // Listen to notes
+    const notesRef = collection(db, 'artifacts', appId, 'public', 'data', 'cleanerNotes');
+    const unsubNotes = onSnapshot(notesRef, 
+      (snapshot) => {
+        const notesMap = {};
+        snapshot.forEach(doc => {
+          const data = doc.data();
+          notesMap[data.bookingUid] = { id: doc.id, text: data.text };
+        });
+        setNotes(notesMap);
+      },
+      (err) => console.error("Error fetching notes:", err)
+    );
+
+    return () => {
+      unsubManual();
+      unsubNotes();
+    };
+  }, [user]);
+
+  // Combine and sort all bookings
+  const allBookings = useMemo(() => {
+    const combined = [...icalEvents, ...manualBookings];
+    // Sort chronologically by start date
+    combined.sort((a, b) => a.start - b.start);
+    
+    // Filter out past bookings (checkout before today at 00:00)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return combined.filter(b => b.end >= today);
+  }, [icalEvents, manualBookings]);
+
+  // Add Manual Booking handler
+  const handleAddManualBooking = async (e) => {
+    e.preventDefault();
+    if (!user || !db) return;
+    
+    try {
+      const manualRef = collection(db, 'artifacts', appId, 'public', 'data', 'manualBookings');
+      await addDoc(manualRef, {
+        guestName: manualForm.guestName,
+        start: manualForm.start,
+        end: manualForm.end,
+        createdAt: Date.now()
+      });
+      setShowManualForm(false);
+      setManualForm({ guestName: '', start: '', end: '' });
+    } catch (err) {
+      console.error("Error adding manual booking:", err);
+    }
+  };
+
+  // Save/Update Cleaner Note
+  const handleSaveNote = async (bookingUid) => {
+    if (!user || !db) return;
+    
+    try {
+      const existingNote = notes[bookingUid];
+      
+      if (existingNote) {
+        if (noteText.trim() === '') {
+          // Delete note if empty
+          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'cleanerNotes', existingNote.id));
+        } else {
+          // Update existing
+          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'cleanerNotes', existingNote.id), {
+            bookingUid,
+            text: noteText,
+            updatedAt: Date.now()
+          });
+        }
+      } else if (noteText.trim() !== '') {
+        // Create new
+        const notesRef = collection(db, 'artifacts', appId, 'public', 'data', 'cleanerNotes');
+        await addDoc(notesRef, {
+          bookingUid,
+          text: noteText,
+          updatedAt: Date.now()
+        });
+      }
+      
+      setEditingNoteId(null);
+      setNoteText('');
+    } catch (err) {
+      console.error("Error saving note:", err);
+    }
+  };
+
+  const getPlatformStyles = (platform) => {
+    if (platform === 'Airbnb') return { border: 'border-l-rose-500', bg: 'bg-rose-50', badge: 'bg-rose-100 text-rose-700', text: 'text-rose-900' };
+    if (platform === 'Booking.com') return { border: 'border-l-blue-500', bg: 'bg-blue-50', badge: 'bg-blue-100 text-blue-700', text: 'text-blue-900' };
+    return { border: 'border-l-emerald-500', bg: 'bg-emerald-50', badge: 'bg-emerald-100 text-emerald-700', text: 'text-emerald-900' };
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-100 text-slate-800 font-sans pb-20">
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-10">
+        <div className="max-w-4xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
+          <div className="flex items-center space-x-3">
+            <div className="bg-indigo-600 p-2 rounded-lg">
+              <Home className="text-white w-5 h-5" />
+            </div>
+            <h1 className="text-xl font-bold text-slate-900">Turnover Dashboard</h1>
+          </div>
+          <button 
+            onClick={() => setShowManualForm(!showManualForm)}
+            className="flex items-center space-x-1 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            {showManualForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+            <span className="hidden sm:inline">{showManualForm ? 'Cancel' : 'Add Booking'}</span>
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
+        
+        {/* Error State */}
+        {error && (
+          <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md mb-6 shadow-sm">
+            <p className="text-red-700">{error}</p>
+          </div>
+        )}
+
+        {/* Manual Booking Form */}
+        {showManualForm && (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-6">
+            <h2 className="text-lg font-semibold mb-4 border-b pb-2">Add Manual Booking</h2>
+            <form onSubmit={handleAddManualBooking} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Guest Name / Details</label>
+                <input 
+                  type="text" 
+                  required
+                  value={manualForm.guestName}
+                  onChange={(e) => setManualForm({...manualForm, guestName: e.target.value})}
+                  className="w-full border border-slate-300 rounded-md p-2 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="e.g. John Doe - Friends"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Check-in Date</label>
+                  <input 
+                    type="date" 
+                    required
+                    value={manualForm.start}
+                    onChange={(e) => setManualForm({...manualForm, start: e.target.value})}
+                    className="w-full border border-slate-300 rounded-md p-2 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Check-out Date</label>
+                  <input 
+                    type="date" 
+                    required
+                    value={manualForm.end}
+                    onChange={(e) => setManualForm({...manualForm, end: e.target.value})}
+                    className="w-full border border-slate-300 rounded-md p-2 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+              </div>
+              <button 
+                type="submit"
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
+              >
+                Save Booking
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* Loading State */}
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-20">
+            <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
+            <p className="text-slate-500">Syncing calendars...</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {allBookings.length === 0 ? (
+              <div className="text-center py-16 bg-white rounded-xl border border-slate-200 border-dashed">
+                <Calendar className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                <p className="text-slate-500 font-medium">No upcoming bookings found.</p>
+              </div>
+            ) : (
+              allBookings.map((booking) => {
+                const styles = getPlatformStyles(booking.platform);
+                const nights = calculateNights(booking.start, booking.end);
+                const hasNote = !!notes[booking.uid];
+                const isEditingNote = editingNoteId === booking.uid;
+                
+                // Determine if checking in/out today for highlighting
+                const today = new Date();
+                today.setHours(0,0,0,0);
+                const checkInToday = booking.start.getTime() === today.getTime();
+                const checkOutToday = booking.end.getTime() === today.getTime();
+
+                return (
+                  <div 
+                    key={booking.uid} 
+                    className={`bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col sm:flex-row`}
+                  >
+                    {/* Color Bar / Status indicator */}
+                    <div className={`w-full sm:w-3 ${styles.border} border-t-4 sm:border-t-0 sm:border-l-4 flex-shrink-0`}></div>
+                    
+                    <div className="p-4 sm:p-5 flex-1">
+                      {/* Top Row: Platform & Badges */}
+                      <div className="flex justify-between items-start mb-3">
+                        <span className={`text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wide ${styles.badge}`}>
+                          {booking.platform}
+                        </span>
+                        <div className="flex space-x-2">
+                          {checkInToday && (
+                            <span className="bg-amber-100 text-amber-800 text-xs font-bold px-2 py-1 rounded-md">Check-in Today</span>
+                          )}
+                          {checkOutToday && (
+                            <span className="bg-red-100 text-red-800 text-xs font-bold px-2 py-1 rounded-md">Check-out Today</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Main Booking Details */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                        <div>
+                          <h3 className={`text-lg font-bold truncate ${styles.text}`}>
+                            {booking.summary || 'Guest'}
+                          </h3>
+                          <div className="flex items-center text-slate-500 mt-1 text-sm">
+                            <Clock className="w-4 h-4 mr-1.5 opacity-70" />
+                            {nights} {nights === 1 ? 'Night' : 'Nights'}
+                          </div>
+                        </div>
+                        
+                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 flex flex-col justify-center space-y-1">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-slate-500">In:</span>
+                            <span className="font-semibold text-slate-800">{formatDate(booking.start)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-slate-500">Out:</span>
+                            <span className="font-semibold text-slate-800">{formatDate(booking.end)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Cleaner Notes Section */}
+                      <div className="border-t border-slate-100 pt-4 mt-2">
+                        {isEditingNote ? (
+                          <div className="space-y-2">
+                            <textarea
+                              autoFocus
+                              placeholder="e.g. Needs extra towels, early check-in at 2 PM..."
+                              className="w-full border border-slate-300 rounded-md p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none min-h-[80px]"
+                              value={noteText}
+                              onChange={(e) => setNoteText(e.target.value)}
+                            />
+                            <div className="flex justify-end space-x-2">
+                              <button 
+                                onClick={() => setEditingNoteId(null)}
+                                className="px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 rounded-md font-medium transition-colors"
+                              >
+                                Cancel
+                              </button>
+                              <button 
+                                onClick={() => handleSaveNote(booking.uid)}
+                                className="flex items-center px-3 py-1.5 text-sm bg-indigo-600 text-white hover:bg-indigo-700 rounded-md font-medium transition-colors"
+                              >
+                                <Save className="w-4 h-4 mr-1" /> Save Note
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-start justify-between group">
+                            <div className="flex items-start flex-1 mr-4">
+                              <MessageSquare className={`w-5 h-5 mr-2 mt-0.5 ${hasNote ? 'text-amber-500' : 'text-slate-300'}`} />
+                              <div>
+                                {hasNote ? (
+                                  <p className="text-sm text-slate-700 whitespace-pre-wrap">{notes[booking.uid].text}</p>
+                                ) : (
+                                  <p className="text-sm text-slate-400 italic">No notes for cleaner.</p>
+                                )}
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => {
+                                setEditingNoteId(booking.uid);
+                                setNoteText(hasNote ? notes[booking.uid].text : '');
+                              }}
+                              className={`p-1.5 rounded-md text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors ${!hasNote && 'opacity-0 group-hover:opacity-100 sm:opacity-100'}`}
+                              title={hasNote ? "Edit Note" : "Add Note"}
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
