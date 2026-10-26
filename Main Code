@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, addDoc } from 'firebase/firestore';
-import { Calendar, Plus, Edit3, Trash2, Home, MessageSquare, MapPin, Clock, Loader2, Save, X } from 'lucide-react';
+import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, addDoc, query, where } from 'firebase/firestore';
+import { 
+  Calendar, Plus, Home, Users, Bed, Info, ChevronLeft, ChevronRight, 
+  MapPin, Loader2, Settings, X, Save, AlertCircle, Trash2
+} from 'lucide-react';
 
 // --- Firebase Setup ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
@@ -11,56 +14,74 @@ const auth = app.name !== 'mock' ? getAuth(app) : null;
 const db = app.name !== 'mock' ? getFirestore(app) : null;
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-rental-app';
 
-// --- iCal Feeds ---
-const FEEDS = [
-  {
-    platform: 'Airbnb',
-    url: 'https://www.airbnb.com/calendar/ical/781598989631669465.ics?t=b49fb82cb989456dbf3528b66cfca1cc',
-    color: 'bg-rose-50 border-rose-500 text-rose-700',
-    badge: 'bg-rose-100 text-rose-700'
-  },
-  {
-    platform: 'Booking.com',
-    url: 'https://ical.booking.com/v1/export?t=234d19b8-900c-4af0-85ef-0a1998ae2e8e',
-    color: 'bg-blue-50 border-blue-500 text-blue-700',
-    badge: 'bg-blue-100 text-blue-700'
-  }
-];
-
 // --- Utilities ---
-const parseDateString = (dateStr) => {
-  // Extracts YYYYMMDD from DTSTART/DTEND
-  const match = dateStr.match(/(\d{4})(\d{2})(\d{2})/);
+const parseICalDate = (dateStr) => {
+  // Matches YYYYMMDD or YYYYMMDDTHHMMSSZ
+  const match = dateStr.match(/^(\d{4})(\d{2})(\d{2})/);
   if (match) {
     return new Date(parseInt(match[1]), parseInt(match[2]) - 1, parseInt(match[3]));
   }
   return new Date();
 };
 
-const formatDate = (date) => {
-  return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+const isSameDay = (d1, d2) => {
+  return d1.getFullYear() === d2.getFullYear() && 
+         d1.getMonth() === d2.getMonth() && 
+         d1.getDate() === d2.getDate();
 };
 
-const calculateNights = (start, end) => {
-  const diffTime = Math.abs(end - start);
-  return Math.round(diffTime / (1000 * 60 * 60 * 24));
+const getCalendarDays = (currentDate) => {
+  const start = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+  const end = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+  const days = [];
+  
+  // Pad start (Previous month days)
+  const startDay = start.getDay();
+  for (let i = startDay; i > 0; i--) {
+    days.push({ date: new Date(start.getFullYear(), start.getMonth(), 1 - i), isCurrentMonth: false });
+  }
+  
+  // Current month days
+  for (let i = 1; i <= end.getDate(); i++) {
+    days.push({ date: new Date(start.getFullYear(), start.getMonth(), i), isCurrentMonth: true });
+  }
+  
+  // Pad end (Next month days)
+  const endDay = end.getDay();
+  for (let i = 1; i < 7 - endDay; i++) {
+    days.push({ date: new Date(end.getFullYear(), end.getMonth() + 1, i), isCurrentMonth: false });
+  }
+  
+  return days;
 };
 
+// --- Main Application ---
 export default function App() {
   const [user, setUser] = useState(null);
-  const [icalEvents, setIcalEvents] = useState([]);
+  const [listings, setListings] = useState([]);
+  const [selectedListingId, setSelectedListingId] = useState(null);
+  
+  // Data States
   const [manualBookings, setManualBookings] = useState([]);
-  const [notes, setNotes] = useState({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  
-  const [showManualForm, setShowManualForm] = useState(false);
-  const [manualForm, setManualForm] = useState({ guestName: '', start: '', end: '' });
-  
-  const [editingNoteId, setEditingNoteId] = useState(null);
-  const [noteText, setNoteText] = useState('');
+  const [icalEvents, setIcalEvents] = useState([]);
+  const [loadingIcal, setLoadingIcal] = useState(false);
+  const [icalError, setIcalError] = useState(null);
 
-  // 1. Initialize Firebase Auth
+  // Calendar State
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+
+  // Modals State
+  const [showListingModal, setShowListingModal] = useState(false);
+  const [showBookingModal, setShowBookingModal] = useState(false);
+  const [selectedBooking, setSelectedBooking] = useState(null);
+
+  // Forms
+  const [listingForm, setListingForm] = useState({ name: '', airbnbUrl: '', bookingUrl: '' });
+  const [bookingForm, setBookingForm] = useState({ 
+    platform: 'Direct', guestName: '', start: '', end: '', guests: 1, extraBed: false 
+  });
+
+  // 1. Initialize Auth
   useEffect(() => {
     if (!auth) return;
     const initAuth = async () => {
@@ -79,20 +100,74 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Fetch & Parse iCal Data
+  // 2. Fetch Listings
   useEffect(() => {
-    const fetchIcalFeeds = async () => {
-      setLoading(true);
+    if (!user || !db) return;
+    const listingsRef = collection(db, 'artifacts', appId, 'public', 'data', 'listings');
+    const unsub = onSnapshot(listingsRef, (snapshot) => {
+      const fetchedListings = [];
+      snapshot.forEach(doc => fetchedListings.push({ id: doc.id, ...doc.data() }));
+      setListings(fetchedListings);
+      
+      // Auto-select first listing if none selected
+      if (fetchedListings.length > 0 && !selectedListingId) {
+        setSelectedListingId(fetchedListings[0].id);
+      }
+    });
+    return () => unsub();
+  }, [user]);
+
+  // 3. Fetch Manual Bookings for Selected Listing
+  useEffect(() => {
+    if (!user || !db || !selectedListingId) return;
+    const bookingsRef = collection(db, 'artifacts', appId, 'public', 'data', 'manualBookings');
+    const q = query(bookingsRef, where('listingId', '==', selectedListingId));
+    
+    const unsub = onSnapshot(q, (snapshot) => {
+      const fetched = [];
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        fetched.push({
+          id: doc.id,
+          uid: doc.id,
+          platform: data.platform,
+          summary: data.guestName,
+          start: new Date(data.start),
+          end: new Date(data.end),
+          guests: data.guests,
+          extraBed: data.extraBed,
+          isManual: true
+        });
+      });
+      setManualBookings(fetched);
+    });
+    return () => unsub();
+  }, [user, selectedListingId]);
+
+  // 4. Fetch iCal Feeds for Selected Listing
+  useEffect(() => {
+    if (!selectedListingId) return;
+    const listing = listings.find(l => l.id === selectedListingId);
+    if (!listing) return;
+
+    const fetchIcal = async () => {
+      setLoadingIcal(true);
+      setIcalError(null);
+      let allParsedEvents = [];
+
+      const feedsToFetch = [
+        { platform: 'Airbnb', url: listing.airbnbUrl },
+        { platform: 'Booking.com', url: listing.bookingUrl }
+      ].filter(f => f.url && f.url.trim() !== '');
+
       try {
-        let allEvents = [];
-        
-        for (const feed of FEEDS) {
+        for (const feed of feedsToFetch) {
+          // Use allorigins as a reliable public CORS proxy for text
           const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(feed.url)}`;
           const response = await fetch(proxyUrl);
-          if (!response.ok) throw new Error(`Failed to fetch ${feed.platform} calendar`);
+          if (!response.ok) throw new Error(`Failed to fetch ${feed.platform}`);
           
           const text = await response.text();
-          // Unfold lines
           const unfolded = text.replace(/\r\n\s/g, '').replace(/\n\s/g, '');
           const lines = unfolded.split(/\r\n|\n|\r/);
           
@@ -100,373 +175,440 @@ export default function App() {
           
           for (let line of lines) {
             if (line === 'BEGIN:VEVENT') {
-              currentEvent = { platform: feed.platform };
+              currentEvent = { platform: feed.platform, isManual: false, extraBed: false, guests: '?' };
             } else if (line === 'END:VEVENT') {
               if (currentEvent && currentEvent.start && currentEvent.end) {
-                const summary = currentEvent.summary || '';
-                const isBlocked = summary.toLowerCase().includes('not available') || summary.toLowerCase().includes('blocked');
+                const summary = (currentEvent.summary || '').toLowerCase();
+                const isBlocked = summary.includes('not available') || summary.includes('blocked');
                 
-                // Clean up Airbnb summaries (e.g., "Reserved - John Doe" -> "John Doe")
-                if (currentEvent.platform === 'Airbnb' && summary.startsWith('Reserved - ')) {
-                  currentEvent.summary = summary.replace('Reserved - ', '');
+                // Clean up summaries
+                if (currentEvent.platform === 'Airbnb' && currentEvent.summary?.startsWith('Reserved - ')) {
+                  currentEvent.summary = currentEvent.summary.replace('Reserved - ', '');
                 }
                 
                 if (!isBlocked) {
-                  allEvents.push(currentEvent);
+                  allParsedEvents.push(currentEvent);
                 }
               }
               currentEvent = null;
             } else if (currentEvent) {
-              if (line.startsWith('DTSTART')) currentEvent.start = parseDateString(line);
-              else if (line.startsWith('DTEND')) currentEvent.end = parseDateString(line);
+              if (line.startsWith('DTSTART')) currentEvent.start = parseICalDate(line.split(':')[1]);
+              else if (line.startsWith('DTEND')) currentEvent.end = parseICalDate(line.split(':')[1]);
               else if (line.startsWith('SUMMARY')) currentEvent.summary = line.substring(line.indexOf(':') + 1);
               else if (line.startsWith('UID')) currentEvent.uid = line.substring(line.indexOf(':') + 1);
             }
           }
         }
-        setIcalEvents(allEvents);
+        setIcalEvents(allParsedEvents);
       } catch (err) {
-        console.error("Error fetching iCal:", err);
-        setError("Could not load calendar feeds. Showing manual bookings only if available.");
+        console.error("iCal Fetch Error:", err);
+        setIcalError("Failed to sync calendars. Showing available cached data.");
       } finally {
-        setLoading(false);
+        setLoadingIcal(false);
       }
     };
 
-    fetchIcalFeeds();
-  }, []);
+    fetchIcal();
+  }, [selectedListingId, listings]);
 
-  // 3. Fetch Firebase Data (Manual Bookings & Notes)
-  useEffect(() => {
-    if (!user || !db) return;
-
-    // Listen to manual bookings
-    const manualRef = collection(db, 'artifacts', appId, 'public', 'data', 'manualBookings');
-    const unsubManual = onSnapshot(manualRef, 
-      (snapshot) => {
-        const bookings = [];
-        snapshot.forEach(doc => {
-          const data = doc.data();
-          bookings.push({
-            id: doc.id,
-            uid: doc.id,
-            platform: 'Manual',
-            summary: data.guestName,
-            start: new Date(data.start),
-            end: new Date(data.end)
-          });
-        });
-        setManualBookings(bookings);
-      },
-      (err) => console.error("Error fetching manual bookings:", err)
-    );
-
-    // Listen to notes
-    const notesRef = collection(db, 'artifacts', appId, 'public', 'data', 'cleanerNotes');
-    const unsubNotes = onSnapshot(notesRef, 
-      (snapshot) => {
-        const notesMap = {};
-        snapshot.forEach(doc => {
-          const data = doc.data();
-          notesMap[data.bookingUid] = { id: doc.id, text: data.text };
-        });
-        setNotes(notesMap);
-      },
-      (err) => console.error("Error fetching notes:", err)
-    );
-
-    return () => {
-      unsubManual();
-      unsubNotes();
-    };
-  }, [user]);
-
-  // Combine and sort all bookings
+  // Combine and process bookings
   const allBookings = useMemo(() => {
-    const combined = [...icalEvents, ...manualBookings];
-    // Sort chronologically by start date
-    combined.sort((a, b) => a.start - b.start);
-    
-    // Filter out past bookings (checkout before today at 00:00)
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return combined.filter(b => b.end >= today);
+    return [...icalEvents, ...manualBookings].sort((a, b) => a.start - b.start);
   }, [icalEvents, manualBookings]);
 
-  // Add Manual Booking handler
-  const handleAddManualBooking = async (e) => {
+  // --- Handlers ---
+  const handleSaveListing = async (e) => {
     e.preventDefault();
     if (!user || !db) return;
-    
     try {
-      const manualRef = collection(db, 'artifacts', appId, 'public', 'data', 'manualBookings');
-      await addDoc(manualRef, {
-        guestName: manualForm.guestName,
-        start: manualForm.start,
-        end: manualForm.end,
+      const ref = collection(db, 'artifacts', appId, 'public', 'data', 'listings');
+      await addDoc(ref, {
+        name: listingForm.name,
+        airbnbUrl: listingForm.airbnbUrl,
+        bookingUrl: listingForm.bookingUrl,
         createdAt: Date.now()
       });
-      setShowManualForm(false);
-      setManualForm({ guestName: '', start: '', end: '' });
+      setShowListingModal(false);
+      setListingForm({ name: '', airbnbUrl: '', bookingUrl: '' });
     } catch (err) {
-      console.error("Error adding manual booking:", err);
+      console.error(err);
     }
   };
 
-  // Save/Update Cleaner Note
-  const handleSaveNote = async (bookingUid) => {
-    if (!user || !db) return;
-    
+  const handleSaveBooking = async (e) => {
+    e.preventDefault();
+    if (!user || !db || !selectedListingId) return;
     try {
-      const existingNote = notes[bookingUid];
-      
-      if (existingNote) {
-        if (noteText.trim() === '') {
-          // Delete note if empty
-          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'cleanerNotes', existingNote.id));
-        } else {
-          // Update existing
-          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'cleanerNotes', existingNote.id), {
-            bookingUid,
-            text: noteText,
-            updatedAt: Date.now()
-          });
-        }
-      } else if (noteText.trim() !== '') {
-        // Create new
-        const notesRef = collection(db, 'artifacts', appId, 'public', 'data', 'cleanerNotes');
-        await addDoc(notesRef, {
-          bookingUid,
-          text: noteText,
-          updatedAt: Date.now()
-        });
-      }
-      
-      setEditingNoteId(null);
-      setNoteText('');
+      const ref = collection(db, 'artifacts', appId, 'public', 'data', 'manualBookings');
+      await addDoc(ref, {
+        listingId: selectedListingId,
+        platform: bookingForm.platform,
+        guestName: bookingForm.guestName,
+        start: bookingForm.start,
+        end: bookingForm.end,
+        guests: parseInt(bookingForm.guests) || 1,
+        extraBed: bookingForm.extraBed,
+        createdAt: Date.now()
+      });
+      setShowBookingModal(false);
+      setBookingForm({ platform: 'Direct', guestName: '', start: '', end: '', guests: 1, extraBed: false });
     } catch (err) {
-      console.error("Error saving note:", err);
+      console.error(err);
     }
   };
 
-  const getPlatformStyles = (platform) => {
-    if (platform === 'Airbnb') return { border: 'border-l-rose-500', bg: 'bg-rose-50', badge: 'bg-rose-100 text-rose-700', text: 'text-rose-900' };
-    if (platform === 'Booking.com') return { border: 'border-l-blue-500', bg: 'bg-blue-50', badge: 'bg-blue-100 text-blue-700', text: 'text-blue-900' };
-    return { border: 'border-l-emerald-500', bg: 'bg-emerald-50', badge: 'bg-emerald-100 text-emerald-700', text: 'text-emerald-900' };
+  const handleDeleteManualBooking = async (id) => {
+    if (!user || !db) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'manualBookings', id));
+      setSelectedBooking(null);
+    } catch (err) {
+      console.error(err);
+    }
   };
+
+  // --- Rendering Helpers ---
+  const getPlatformColors = (platform) => {
+    if (platform === 'Airbnb') return 'bg-[#FF5A5F] text-white'; // Airbnb Pink/Red
+    if (platform === 'Booking.com') return 'bg-[#003580] text-white'; // Booking Blue
+    return 'bg-emerald-600 text-white'; // Direct/Manual Green
+  };
+
+  const prevMonth = () => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1));
+  const nextMonth = () => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1));
+
+  const calendarDays = getCalendarDays(currentMonth);
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800 font-sans pb-20">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
-          <div className="flex items-center space-x-3">
-            <div className="bg-indigo-600 p-2 rounded-lg">
-              <Home className="text-white w-5 h-5" />
-            </div>
-            <h1 className="text-xl font-bold text-slate-900">Turnover Dashboard</h1>
+    <div className="flex h-screen bg-white text-slate-800 font-sans overflow-hidden">
+      
+      {/* LEFT SIDEBAR - Listings */}
+      <div className="w-20 md:w-64 border-r border-slate-200 flex flex-col bg-slate-50 flex-shrink-0">
+        <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+          <div className="flex items-center space-x-2 text-[#FF5A5F]">
+            <Home className="w-6 h-6" />
+            <span className="font-bold text-lg hidden md:block">Properties</span>
           </div>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {listings.map(listing => (
+            <button
+              key={listing.id}
+              onClick={() => setSelectedListingId(listing.id)}
+              className={`w-full flex items-center space-x-3 p-2 rounded-xl transition-all ${
+                selectedListingId === listing.id 
+                  ? 'bg-white shadow-sm ring-1 ring-slate-200' 
+                  : 'hover:bg-slate-100 opacity-70'
+              }`}
+            >
+              <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                selectedListingId === listing.id ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-200 text-slate-500'
+              }`}>
+                <MapPin className="w-6 h-6" />
+              </div>
+              <div className="hidden md:block text-left truncate">
+                <p className="font-semibold text-sm truncate">{listing.name}</p>
+                <p className="text-xs text-slate-500">Calendar view</p>
+              </div>
+            </button>
+          ))}
+
           <button 
-            onClick={() => setShowManualForm(!showManualForm)}
-            className="flex items-center space-x-1 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+            onClick={() => setShowListingModal(true)}
+            className="w-full flex items-center space-x-3 p-2 rounded-xl border border-dashed border-slate-300 text-slate-500 hover:bg-slate-100 transition-colors mt-4"
           >
-            {showManualForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-            <span className="hidden sm:inline">{showManualForm ? 'Cancel' : 'Add Booking'}</span>
+            <div className="w-12 h-12 rounded-lg flex items-center justify-center bg-slate-50 flex-shrink-0">
+              <Plus className="w-5 h-5" />
+            </div>
+            <span className="hidden md:block text-sm font-medium">Add Listing</span>
           </button>
         </div>
-      </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
+        <div className="p-4 border-t border-slate-200">
+          <button 
+            onClick={() => setShowListingModal(true)}
+            className="flex items-center text-sm text-slate-600 hover:text-slate-900 w-full justify-center md:justify-start"
+          >
+            <Settings className="w-5 h-5 md:mr-2" />
+            <span className="hidden md:block">Manage Feeds</span>
+          </button>
+        </div>
+      </div>
+
+      {/* MAIN CONTENT - Calendar Grid */}
+      <div className="flex-1 flex flex-col min-w-0 bg-white">
         
-        {/* Error State */}
-        {error && (
-          <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md mb-6 shadow-sm">
-            <p className="text-red-700">{error}</p>
+        {/* Top Header */}
+        <header className="h-16 border-b border-slate-200 px-6 flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center space-x-4">
+            <h2 className="text-2xl font-bold">
+              {currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}
+            </h2>
+            <div className="flex space-x-1">
+              <button onClick={prevMonth} className="p-1.5 rounded-full hover:bg-slate-100"><ChevronLeft className="w-5 h-5" /></button>
+              <button onClick={nextMonth} className="p-1.5 rounded-full hover:bg-slate-100"><ChevronRight className="w-5 h-5" /></button>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-4">
+            {loadingIcal && (
+              <span className="flex items-center text-sm text-slate-500 bg-slate-50 px-3 py-1 rounded-full border border-slate-200">
+                <Loader2 className="w-4 h-4 animate-spin mr-2" /> Syncing...
+              </span>
+            )}
+            <button 
+              onClick={() => setShowBookingModal(true)}
+              disabled={!selectedListingId}
+              className="flex items-center px-4 py-2 bg-slate-900 text-white text-sm font-medium rounded-lg hover:bg-slate-800 disabled:opacity-50 transition-colors"
+            >
+              <Plus className="w-4 h-4 mr-1.5" /> Add Booking
+            </button>
+          </div>
+        </header>
+
+        {icalError && (
+          <div className="bg-red-50 text-red-600 p-2 text-sm text-center border-b border-red-100 flex justify-center items-center">
+            <AlertCircle className="w-4 h-4 mr-2" /> {icalError}
           </div>
         )}
 
-        {/* Manual Booking Form */}
-        {showManualForm && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-6">
-            <h2 className="text-lg font-semibold mb-4 border-b pb-2">Add Manual Booking</h2>
-            <form onSubmit={handleAddManualBooking} className="space-y-4">
+        {/* Calendar Grid Container */}
+        <div className="flex-1 flex flex-col overflow-auto bg-slate-50 p-6">
+          {!selectedListingId ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
+              <Calendar className="w-16 h-16 mb-4 opacity-50" />
+              <p className="text-lg font-medium text-slate-600">No listing selected</p>
+              <p>Select or create a property on the left to view calendar.</p>
+            </div>
+          ) : (
+            <div className="flex-1 bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col min-w-[600px]">
+              {/* Days of Week */}
+              <div className="grid grid-cols-7 border-b border-slate-200 flex-shrink-0">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                  <div key={day} className="p-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    {day}
+                  </div>
+                ))}
+              </div>
+              
+              {/* Days Grid */}
+              <div className="grid grid-cols-7 flex-1 auto-rows-fr">
+                {calendarDays.map((dayObj, i) => {
+                  // Find bookings that overlap with this date
+                  // A booking is active if date is >= start and date < end
+                  const dayStart = new Date(dayObj.date.getFullYear(), dayObj.date.getMonth(), dayObj.date.getDate());
+                  
+                  const daysBookings = allBookings.filter(b => {
+                    const bStart = new Date(b.start.getFullYear(), b.start.getMonth(), b.start.getDate());
+                    const bEnd = new Date(b.end.getFullYear(), b.end.getMonth(), b.end.getDate());
+                    return dayStart >= bStart && dayStart < bEnd;
+                  });
+
+                  return (
+                    <div 
+                      key={i} 
+                      className={`min-h-[100px] border-b border-r border-slate-100 p-1.5 relative group
+                        ${!dayObj.isCurrentMonth ? 'bg-slate-50 text-slate-400' : 'bg-white'}
+                        ${i % 7 === 6 ? 'border-r-0' : ''}
+                      `}
+                    >
+                      <span className={`inline-flex w-7 h-7 items-center justify-center rounded-full text-sm font-medium mb-1
+                        ${isSameDay(dayObj.date, new Date()) ? 'bg-indigo-600 text-white' : ''}
+                      `}>
+                        {dayObj.date.getDate()}
+                      </span>
+                      
+                      {/* Render Booking Pills */}
+                      <div className="space-y-1 mt-1">
+                        {daysBookings.map((b, idx) => {
+                          const bStart = new Date(b.start.getFullYear(), b.start.getMonth(), b.start.getDate());
+                          const bEnd = new Date(b.end.getFullYear(), b.end.getMonth(), b.end.getDate());
+                          
+                          // Determine border radius to make it look connected
+                          const isStartDay = isSameDay(dayStart, bStart);
+                          const isBeforeEndDay = isSameDay(dayStart, new Date(bEnd.getTime() - 86400000));
+                          
+                          let roundedClass = 'rounded-none';
+                          if (isStartDay && isBeforeEndDay) roundedClass = 'rounded-md mx-1';
+                          else if (isStartDay) roundedClass = 'rounded-l-md ml-1';
+                          else if (isBeforeEndDay) roundedClass = 'rounded-r-md mr-1';
+                          else roundedClass = 'w-full';
+
+                          return (
+                            <div 
+                              key={`${b.uid}-${idx}`}
+                              onClick={() => setSelectedBooking(b)}
+                              className={`
+                                cursor-pointer px-2 py-1 text-[11px] leading-tight font-semibold truncate shadow-sm transition-opacity hover:opacity-90
+                                ${getPlatformColors(b.platform)}
+                                ${roundedClass}
+                              `}
+                              title={b.summary}
+                            >
+                              {b.summary || 'Booked'}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* --- MODALS --- */}
+
+      {/* Booking Details Modal */}
+      {selectedBooking && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className={`p-4 text-white flex justify-between items-start ${getPlatformColors(selectedBooking.platform).split(' ')[0]}`}>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Guest Name / Details</label>
-                <input 
-                  type="text" 
-                  required
-                  value={manualForm.guestName}
-                  onChange={(e) => setManualForm({...manualForm, guestName: e.target.value})}
-                  className="w-full border border-slate-300 rounded-md p-2 focus:ring-2 focus:ring-indigo-500 outline-none"
-                  placeholder="e.g. John Doe - Friends"
-                />
+                <h3 className="text-xl font-bold mb-1">{selectedBooking.summary || 'Guest Booking'}</h3>
+                <span className="inline-block bg-white/20 px-2 py-1 rounded text-xs font-semibold uppercase tracking-wider">
+                  {selectedBooking.platform}
+                </span>
+              </div>
+              <button onClick={() => setSelectedBooking(null)} className="text-white/70 hover:text-white"><X className="w-6 h-6" /></button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <p className="text-xs text-slate-500 font-semibold uppercase">Check-in</p>
+                  <p className="font-bold text-slate-800">{selectedBooking.start.toLocaleDateString()}</p>
+                </div>
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <p className="text-xs text-slate-500 font-semibold uppercase">Check-out</p>
+                  <p className="font-bold text-slate-800">{selectedBooking.end.toLocaleDateString()}</p>
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-between border-t border-slate-100 pt-4">
+                <div className="flex items-center text-slate-700">
+                  <Users className="w-5 h-5 mr-2 text-slate-400" />
+                  <span className="font-medium">{selectedBooking.guests || '?'} Guests</span>
+                </div>
+                {selectedBooking.extraBed && (
+                  <div className="flex items-center text-amber-600 bg-amber-50 px-3 py-1 rounded-full text-sm font-medium">
+                    <Bed className="w-4 h-4 mr-1.5" /> Extra Bed Needed
+                  </div>
+                )}
+              </div>
+
+              {!selectedBooking.isManual && (
+                <div className="flex items-start text-sm text-slate-500 bg-blue-50 p-3 rounded-lg border border-blue-100">
+                  <Info className="w-4 h-4 mr-2 flex-shrink-0 mt-0.5 text-blue-500" />
+                  <p>This booking is synced automatically via iCal. To edit guests or extra beds, update it on {selectedBooking.platform}.</p>
+                </div>
+              )}
+
+              {selectedBooking.isManual && (
+                <div className="pt-4 border-t border-slate-100">
+                  <button 
+                    onClick={() => handleDeleteManualBooking(selectedBooking.id)}
+                    className="w-full flex justify-center items-center py-2 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors text-sm font-bold"
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" /> Delete Manual Booking
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Listing Modal */}
+      {showListingModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden">
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center">
+              <h3 className="font-bold text-lg">Add New Property</h3>
+              <button onClick={() => setShowListingModal(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleSaveListing} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Listing Name</label>
+                <input required type="text" value={listingForm.name} onChange={e => setListingForm({...listingForm, name: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="e.g. Villa Bali" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Airbnb iCal URL</label>
+                <input type="url" value={listingForm.airbnbUrl} onChange={e => setListingForm({...listingForm, airbnbUrl: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none text-sm" placeholder="https://www.airbnb.com/calendar/ical/..." />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Booking.com iCal URL</label>
+                <input type="url" value={listingForm.bookingUrl} onChange={e => setListingForm({...listingForm, bookingUrl: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none text-sm" placeholder="https://ical.booking.com/v1/export..." />
+              </div>
+              <div className="pt-4 flex justify-end space-x-3">
+                <button type="button" onClick={() => setShowListingModal(false)} className="px-4 py-2 text-slate-600 font-medium hover:bg-slate-100 rounded-lg">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 flex items-center">
+                  <Save className="w-4 h-4 mr-2" /> Save Property
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Manual Booking Modal */}
+      {showBookingModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center">
+              <h3 className="font-bold text-lg">Add Manual Booking</h3>
+              <button onClick={() => setShowBookingModal(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleSaveBooking} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Platform / Source</label>
+                <select value={bookingForm.platform} onChange={e => setBookingForm({...bookingForm, platform: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2.5 outline-none bg-white">
+                  <option value="Direct">Direct Booking</option>
+                  <option value="Airbnb">Airbnb (Manual)</option>
+                  <option value="Booking.com">Booking.com (Manual)</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Guest Name</label>
+                <input required type="text" value={bookingForm.guestName} onChange={e => setBookingForm({...bookingForm, guestName: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2.5 outline-none" placeholder="John Doe" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Check-in Date</label>
-                  <input 
-                    type="date" 
-                    required
-                    value={manualForm.start}
-                    onChange={(e) => setManualForm({...manualForm, start: e.target.value})}
-                    className="w-full border border-slate-300 rounded-md p-2 focus:ring-2 focus:ring-indigo-500 outline-none"
-                  />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Check-in</label>
+                  <input required type="date" value={bookingForm.start} onChange={e => setBookingForm({...bookingForm, start: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2 outline-none text-sm" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Check-out Date</label>
-                  <input 
-                    type="date" 
-                    required
-                    value={manualForm.end}
-                    onChange={(e) => setManualForm({...manualForm, end: e.target.value})}
-                    className="w-full border border-slate-300 rounded-md p-2 focus:ring-2 focus:ring-indigo-500 outline-none"
-                  />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Check-out</label>
+                  <input required type="date" value={bookingForm.end} onChange={e => setBookingForm({...bookingForm, end: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2 outline-none text-sm" />
                 </div>
               </div>
-              <button 
-                type="submit"
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
-              >
-                Save Booking
-              </button>
+              <div className="grid grid-cols-2 gap-4 items-center">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Total Guests</label>
+                  <input required type="number" min="1" value={bookingForm.guests} onChange={e => setBookingForm({...bookingForm, guests: e.target.value})} className="w-full border border-slate-300 rounded-lg p-2 outline-none" />
+                </div>
+                <div className="flex items-center h-full pt-6">
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" checked={bookingForm.extraBed} onChange={e => setBookingForm({...bookingForm, extraBed: e.target.checked})} className="w-5 h-5 text-indigo-600 rounded border-slate-300" />
+                    <span className="text-sm font-medium text-slate-700">Needs Extra Bed</span>
+                  </label>
+                </div>
+              </div>
+              <div className="pt-4 flex justify-end space-x-3">
+                <button type="button" onClick={() => setShowBookingModal(false)} className="px-4 py-2 text-slate-600 font-medium hover:bg-slate-100 rounded-lg">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-slate-900 text-white font-medium rounded-lg hover:bg-slate-800 flex items-center">
+                  <Save className="w-4 h-4 mr-2" /> Save Booking
+                </button>
+              </div>
             </form>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Loading State */}
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-20">
-            <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
-            <p className="text-slate-500">Syncing calendars...</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {allBookings.length === 0 ? (
-              <div className="text-center py-16 bg-white rounded-xl border border-slate-200 border-dashed">
-                <Calendar className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                <p className="text-slate-500 font-medium">No upcoming bookings found.</p>
-              </div>
-            ) : (
-              allBookings.map((booking) => {
-                const styles = getPlatformStyles(booking.platform);
-                const nights = calculateNights(booking.start, booking.end);
-                const hasNote = !!notes[booking.uid];
-                const isEditingNote = editingNoteId === booking.uid;
-                
-                // Determine if checking in/out today for highlighting
-                const today = new Date();
-                today.setHours(0,0,0,0);
-                const checkInToday = booking.start.getTime() === today.getTime();
-                const checkOutToday = booking.end.getTime() === today.getTime();
-
-                return (
-                  <div 
-                    key={booking.uid} 
-                    className={`bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col sm:flex-row`}
-                  >
-                    {/* Color Bar / Status indicator */}
-                    <div className={`w-full sm:w-3 ${styles.border} border-t-4 sm:border-t-0 sm:border-l-4 flex-shrink-0`}></div>
-                    
-                    <div className="p-4 sm:p-5 flex-1">
-                      {/* Top Row: Platform & Badges */}
-                      <div className="flex justify-between items-start mb-3">
-                        <span className={`text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wide ${styles.badge}`}>
-                          {booking.platform}
-                        </span>
-                        <div className="flex space-x-2">
-                          {checkInToday && (
-                            <span className="bg-amber-100 text-amber-800 text-xs font-bold px-2 py-1 rounded-md">Check-in Today</span>
-                          )}
-                          {checkOutToday && (
-                            <span className="bg-red-100 text-red-800 text-xs font-bold px-2 py-1 rounded-md">Check-out Today</span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Main Booking Details */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                        <div>
-                          <h3 className={`text-lg font-bold truncate ${styles.text}`}>
-                            {booking.summary || 'Guest'}
-                          </h3>
-                          <div className="flex items-center text-slate-500 mt-1 text-sm">
-                            <Clock className="w-4 h-4 mr-1.5 opacity-70" />
-                            {nights} {nights === 1 ? 'Night' : 'Nights'}
-                          </div>
-                        </div>
-                        
-                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 flex flex-col justify-center space-y-1">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-slate-500">In:</span>
-                            <span className="font-semibold text-slate-800">{formatDate(booking.start)}</span>
-                          </div>
-                          <div className="flex justify-between text-sm">
-                            <span className="text-slate-500">Out:</span>
-                            <span className="font-semibold text-slate-800">{formatDate(booking.end)}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Cleaner Notes Section */}
-                      <div className="border-t border-slate-100 pt-4 mt-2">
-                        {isEditingNote ? (
-                          <div className="space-y-2">
-                            <textarea
-                              autoFocus
-                              placeholder="e.g. Needs extra towels, early check-in at 2 PM..."
-                              className="w-full border border-slate-300 rounded-md p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none min-h-[80px]"
-                              value={noteText}
-                              onChange={(e) => setNoteText(e.target.value)}
-                            />
-                            <div className="flex justify-end space-x-2">
-                              <button 
-                                onClick={() => setEditingNoteId(null)}
-                                className="px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 rounded-md font-medium transition-colors"
-                              >
-                                Cancel
-                              </button>
-                              <button 
-                                onClick={() => handleSaveNote(booking.uid)}
-                                className="flex items-center px-3 py-1.5 text-sm bg-indigo-600 text-white hover:bg-indigo-700 rounded-md font-medium transition-colors"
-                              >
-                                <Save className="w-4 h-4 mr-1" /> Save Note
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex items-start justify-between group">
-                            <div className="flex items-start flex-1 mr-4">
-                              <MessageSquare className={`w-5 h-5 mr-2 mt-0.5 ${hasNote ? 'text-amber-500' : 'text-slate-300'}`} />
-                              <div>
-                                {hasNote ? (
-                                  <p className="text-sm text-slate-700 whitespace-pre-wrap">{notes[booking.uid].text}</p>
-                                ) : (
-                                  <p className="text-sm text-slate-400 italic">No notes for cleaner.</p>
-                                )}
-                              </div>
-                            </div>
-                            <button 
-                              onClick={() => {
-                                setEditingNoteId(booking.uid);
-                                setNoteText(hasNote ? notes[booking.uid].text : '');
-                              }}
-                              className={`p-1.5 rounded-md text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors ${!hasNote && 'opacity-0 group-hover:opacity-100 sm:opacity-100'}`}
-                              title={hasNote ? "Edit Note" : "Add Note"}
-                            >
-                              <Edit3 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        )}
-      </main>
     </div>
   );
 }
