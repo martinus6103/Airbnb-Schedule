@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rental Dashboard</title>
+<style>
+:root{--bg:#fff;--fg:#222;--mut:#717171;--line:#ddd;--card:#f7f7f7;--air:#FF5A5F;--bk:#003580;--dir:#059669;--acc:#222;--good:#047857;--bad:#b91c1c}
+@media(prefers-color-scheme:dark){:root{--bg:#121212;--fg:#eee;--mut:#a0a0a0;--line:#333;--card:#1e1e1e;--acc:#eee;--good:#34d399;--bad:#f87171}}
+*{box-sizing:border-box}
+body{margin:0;height:100vh;display:flex;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif}
+button,select,input,textarea{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+button{cursor:pointer}button.p{background:var(--fg);color:var(--bg);border-color:var(--fg);font-weight:600}button.d{color:var(--bad)}
+aside{width:230px;border-right:1px solid var(--line);display:flex;flex-direction:column;flex-shrink:0}
+aside h1{font-size:17px;margin:0;padding:16px;border-bottom:1px solid var(--line)}
+#side{flex:1;overflow:auto;padding:10px}
+.li{display:flex;gap:10px;align-items:center;width:100%;text-align:left;border:2px solid transparent;background:none;padding:8px;border-radius:12px;margin-bottom:4px}
+.li.on{border-color:var(--fg)}.li i{width:38px;height:38px;border-radius:8px;background:var(--card);border:1px solid var(--line);display:grid;place-items:center;font-style:normal;font-weight:700;flex-shrink:0}
+.li span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.foot{padding:10px;border-top:1px solid var(--line);display:grid;gap:6px}
+section.main{flex:1;min-width:0;display:flex;flex-direction:column}
+header{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}h2{margin:0;font-size:26px;min-width:190px}
+.tabs button{border:0;background:none;border-bottom:2px solid transparent;border-radius:0}.tabs button.on{border-color:var(--fg);font-weight:700}
+#body{flex:1;overflow:auto;padding:14px 18px}
+.note{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin-bottom:10px;color:var(--mut)}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(70px,1fr));gap:6px;min-width:520px}
+.dow{text-align:center;color:var(--mut);padding:4px}
+.cell{min-height:104px;border:1px solid var(--line);border-radius:14px;padding:6px 0;overflow:hidden;cursor:pointer}
+.cell.o{opacity:.45}.cell.t>b{background:var(--fg);color:var(--bg)}
+.cell>b{display:inline-block;margin:0 0 4px 8px;min-width:24px;text-align:center;border-radius:12px;padding:0 4px}
+.pill{color:#fff;font-weight:600;font-size:12px;padding:5px 8px;margin:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:24px}
+.pill.s{border-radius:14px 0 0 14px;margin-left:5px}.pill.e{border-radius:0 14px 14px 0;margin-right:5px}.pill.s.e{border-radius:14px}
+.Airbnb{background:var(--air)}.Booking\.com{background:var(--bk)}.Direct{background:var(--dir)}
+.pill.x{outline:3px solid #facc15;outline-offset:-3px}
+.leg{display:flex;gap:16px;flex-wrap:wrap;color:var(--mut);margin-top:10px}.leg b{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px}.card small{color:var(--mut)}.card div{font-size:21px;font-weight:700}
+table{width:100%;border-collapse:collapse;margin:6px 0 18px}th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}.n{text-align:right}
+.in{color:var(--good)}.out{color:var(--bad)}.sc{overflow-x:auto}
+dialog{border:1px solid var(--line);border-radius:16px;background:var(--bg);color:var(--fg);width:min(440px,94vw);max-height:92vh}
+dialog::backdrop{background:#0008}dialog label{display:block;margin:9px 0 3px;font-size:12px;color:var(--mut)}
+dialog input,dialog select,dialog textarea{width:100%}.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.hide{display:none!important}
+@media(max-width:700px){aside{width:64px}aside h1,.li span,.foot button span{display:none}.foot button{padding:8px 0}}
+</style>
+</head>
+<body>
+<aside>
+  <h1>Listings</h1>
+  <div id="side"></div>
+  <div class="foot own">
+    <button onclick="addListing()">+ <span>Add listing</span></button>
+    <button onclick="openShare()">&#128279; <span>Share links</span></button>
+    <button onclick="backup()">&#11015; <span>Backup</span></button>
+    <button onclick="document.getElementById('rf').click()">&#11014; <span>Restore</span></button>
+    <input type="file" id="rf" accept=".json" class="hide" onchange="restore(this)">
+  </div>
+</aside>
+<section class="main">
+  <header>
+    <div class="row"><h2 id="mo"></h2><button onclick="mv(-1)">&lsaquo;</button><button onclick="mv(1)">&rsaquo;</button><button onclick="cur=new Date();draw()">Today</button></div>
+    <div class="tabs row"><button id="t-cal" class="on" onclick="tab('cal')">Calendar</button><button id="t-fin" onclick="tab('fin')">Earnings &amp; P&amp;L</button></div>
+    <div class="row">
+      <button onclick="openExport()">Export table</button>
+      <button class="own p" onclick="openB()">+ Add booking</button>
+      <button class="own p hide" id="addx" onclick="openX()">+ Add expense</button>
+    </div>
+  </header>
+  <div id="body">
+    <div id="ban" class="note hide"></div>
+    <div id="v-cal"><div class="sc"><div class="cal" id="cal"></div></div>
+      <div class="leg"><span><b style="background:var(--air)"></b>Airbnb</span><span><b style="background:var(--bk)"></b>Booking.com</span><span><b style="background:var(--dir)"></b>Direct</span><span>Yellow outline = overlapping bookings</span></div></div>
+    <div id="v-fin" class="hide">
+      <div class="row" style="margin-bottom:10px"><label>Show</label><select id="fl" onchange="draw()"></select></div>
+      <div class="cards"><div class="card"><small>Earnings (by check-in month)</small><div id="s-in" class="in"></div></div><div class="card"><small>Expenses</small><div id="s-out" class="out"></div></div><div class="card"><small>Profit</small><div id="s-pl"></div></div></div>
+      <h3>Earnings this month</h3><div class="sc"><table id="t-inc"></table></div>
+      <h3>Expenses this month</h3><div class="sc"><table id="t-exp"></table></div>
+      <h3 id="yt"></h3><div class="sc"><table id="t-yr"></table></div>
+    </div>
+  </div>
+</section>
+
+<dialog id="bd"><h3 id="bt">Add booking</h3>
+  <label>Listing</label><select id="b-l"></select>
+  <label>Booked via</label><select id="b-p"><option>Airbnb</option><option>Booking.com</option><option>Direct</option></select>
+  <label>Guest name</label><input id="b-n">
+  <div class="g2"><div><label>Check-in</label><input type="date" id="b-s"></div><div><label>Check-out</label><input type="date" id="b-e"></div></div>
+  <div class="g2"><div><label>Number of guests</label><input type="number" id="b-g" min="1" value="1"></div><div><label>Earnings (optional, can add later)</label><input type="number" id="b-m" min="0" step="any"></div></div>
+  <label>Notes (early check-in, late check-out, extra beds...)</label><textarea id="b-t" rows="3"></textarea>
+  <div class="row" style="justify-content:space-between;margin-top:14px"><button class="d hide" id="b-del" onclick="delB()">Delete</button><div class="row" style="margin-left:auto"><button onclick="bd.close()">Cancel</button><button class="p" onclick="saveB()">Save</button></div></div>
+</dialog>
+
+<dialog id="dd"><div id="dc"></div><div class="row" style="justify-content:flex-end;margin-top:14px"><button class="own" id="d-edit">Edit</button><button onclick="dd.close()">Close</button></div></dialog>
+
+<dialog id="xd"><h3>Add expense</h3>
+  <label>Listing</label><select id="x-l"></select>
+  <div class="g2"><div><label>Date</label><input type="date" id="x-d"></div><div><label>Amount</label><input type="number" id="x-a" min="0" step="any"></div></div>
+  <label>Category</label><input id="x-c" list="cats" placeholder="Cleaning, Utilities..."><datalist id="cats"><option>Cleaning<option>Utilities<option>Maintenance<option>Supplies<option>Platform fees<option>Co-host fee<option>Tax</datalist>
+  <label>Note</label><input id="x-n">
+  <div class="row" style="justify-content:flex-end;margin-top:14px"><button onclick="xd.close()">Cancel</button><button class="p" onclick="saveX()">Save</button></div>
+</dialog>
+
+<dialog id="ed" style="width:min(900px,96vw)"><h3>Export table as image</h3>
+  <div class="g2"><div><label>Listing</label><select id="e-l" onchange="drawEx()"></select></div>
+  <div><label>Period</label><select id="e-m" onchange="drawEx()"><option value="month">A month</option><option value="custom">Custom dates</option></select></div></div>
+  <div id="e-mo"><label>Month</label><input type="month" id="e-mv" onchange="drawEx()"></div>
+  <div id="e-cu" class="g2 hide"><div><label>From</label><input type="date" id="e-f" onchange="drawEx()"></div><div><label>To</label><input type="date" id="e-t" onchange="drawEx()"></div></div>
+  <label class="own"><input type="checkbox" id="e-$" style="width:auto" onchange="drawEx()"> Include earnings column</label>
+  <div style="margin-top:12px;max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:10px"><img id="e-img" style="width:100%;display:block;background:#fff" alt="Table preview"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:14px"><button onclick="ed.close()">Close</button><button class="p" onclick="dlEx()">Download PNG</button></div>
+</dialog>
+
+<dialog id="sd"><h3>Share read-only links</h3>
+  <p class="note">Links contain a snapshot of your data. Anyone with a link can view it, so only send it to people you trust. After you make changes, send a fresh link.</p>
+  <label>Calendar only: cleaner and co-host (no earnings or expenses)</label><div class="row"><input id="u-c" readonly style="flex:1"><button onclick="cp('u-c')">Copy</button></div>
+  <label>Calendar + earnings + expenses: for your dad</label><div class="row"><input id="u-f" readonly style="flex:1"><button onclick="cp('u-f')">Copy</button></div>
+  <div class="row" style="justify-content:flex-end;margin-top:14px"><button onclick="sd.close()">Close</button></div>
+</dialog>
+
+<script>
+const CUR='IDR', LOCALE='id-ID';
+const $=id=>document.getElementById(id), PL=['Airbnb','Booking.com','Direct'];
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad=n=>String(n).padStart(2,'0'), ymd=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const D=s=>new Date(s+'T00:00'), nights=(s,e)=>Math.round((D(e)-D(s))/864e5), addD=(s,n)=>{const d=D(s);d.setDate(d.getDate()+n);return ymd(d)};
+const fmt=n=>new Intl.NumberFormat(LOCALE,{style:'currency',currency:CUR,maximumFractionDigits:0}).format(n||0);
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+let S={l:[],b:[],x:[]}, V=null, cur=new Date(), sel=null, view='cal', editB=null;
+try{S=JSON.parse(localStorage.getItem('rd'))||S}catch(e){}
+const save=()=>{if(!V)try{localStorage.setItem('rd',JSON.stringify(S))}catch(e){}};
+const LN=id=>(S.l.find(x=>x.id===id)||{}).name||'(deleted)';
+
+// ---- share links (data lives in the URL hash, no server) ----
+const b64=b=>{let t='';b.forEach(x=>t+=String.fromCharCode(x));return btoa(t).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')};
+async function pack(o){const s=new Blob([JSON.stringify(o)]).stream().pipeThrough(new CompressionStream('gzip'));return b64(new Uint8Array(await new Response(s).arrayBuffer()))}
+async function unpack(t){const b=Uint8Array.from(atob(t.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));return JSON.parse(await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).text())}
+async function openShare(){
+  const base=location.href.split('#')[0], from=addD(ymd(new Date()),-62), keep=S.b.filter(b=>b.e>=from);
+  const c=await pack({l:S.l,b:keep.map(({m,...r})=>r),t:Date.now()});
+  const f=await pack({l:S.l,b:keep,x:S.x.filter(x=>x.d>=from),t:Date.now()});
+  $('u-c').value=base+'#c='+c;$('u-f').value=base+'#f='+f;sd.showModal();
+}
+function cp(id){$(id).select();navigator.clipboard?.writeText($(id).value)}
+
+// ---- listings ----
+function addListing(){const n=prompt('Listing name');if(!n||!n.trim())return;const l={id:uid(),name:n.trim()};S.l.push(l);sel=l.id;save();draw()}
+function renameListing(id){const l=S.l.find(x=>x.id===id),n=prompt('Rename listing',l.name);if(n&&n.trim()){l.name=n.trim();save();draw()}}
+function delListing(id){if(!confirm('Delete this listing and all its bookings and expenses?'))return;S.l=S.l.filter(x=>x.id!==id);S.b=S.b.filter(b=>b.l!==id);S.x=S.x.filter(x=>x.l!==id);sel=S.l[0]?.id||null;save();draw()}
+
+// ---- drawing ----
+function mv(n){cur=new Date(cur.getFullYear(),cur.getMonth()+n,1);draw()}
+function tab(t){view=t;draw()}
+function draw(){
+  if(!S.l.find(l=>l.id===sel))sel=S.l[0]?.id||null;
+  const own=!V, fin=!V||V==='f';
+  document.querySelectorAll('.own').forEach(e=>e.classList.toggle('hide',!own));
+  $('t-fin').classList.toggle('hide',!fin);if(!fin)view='cal';
+  $('addx').classList.toggle('hide',!(own&&view==='fin'));
+  $('t-cal').classList.toggle('on',view==='cal');$('t-fin').classList.toggle('on',view==='fin');
+  $('v-cal').classList.toggle('hide',view!=='cal');$('v-fin').classList.toggle('hide',view!=='fin');
+  $('mo').textContent=cur.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+  $('ban').classList.toggle('hide',!V);if(V)$('ban').textContent='Read-only snapshot from '+new Date(S.t).toLocaleString()+'. Ask the owner for a new link to see updates.';
+  $('side').innerHTML=S.l.map(l=>`<button class="li ${l.id===sel?'on':''}" onclick="sel='${l.id}';draw()"><i>${esc(l.name.slice(0,1).toUpperCase())}</i><span>${esc(l.name)}</span></button>`).join('')||'<p class="note">No listings yet.</p>';
+  if(own&&sel)$('side').innerHTML+=`<div class="row" style="padding:4px"><button onclick="renameListing('${sel}')">Rename</button><button class="d" onclick="delListing('${sel}')">Delete</button></div>`;
+  view==='cal'?drawCal():drawFin();
+}
+function drawCal(){
+  const y=cur.getFullYear(),m=cur.getMonth(),f=new Date(y,m,1),l=new Date(y,m+1,0),days=[];
+  for(let i=f.getDay();i>0;i--)days.push([new Date(y,m,1-i),0]);
+  for(let i=1;i<=l.getDate();i++)days.push([new Date(y,m,i),1]);
+  for(let i=1;i<7-l.getDay();i++)days.push([new Date(y,m+1,i),0]);
+  const bs=S.b.filter(b=>b.l===sel).sort((a,b)=>a.s<b.s?-1:1), today=ymd(new Date());
+  bs.forEach(b=>b.x=bs.some(o=>o!==b&&b.s<o.e&&o.s<b.e));
+  let h=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="dow">${d}</div>`).join('');
+  days.forEach(([d,inM],i)=>{
+    const k=ymd(d),nx=addD(k,1);
+    h+=`<div class="cell ${inM?'':'o'} ${k===today?'t':''}" ${V||!sel?'':`onclick="openB(null,'${k}')"`}><b>${d.getDate()}</b>`;
+    bs.filter(b=>b.s<=k&&k<b.e).forEach(b=>{
+      const st=b.s===k,en=b.e===nx,lbl=(st||i%7===0)?esc(b.n)+(b.g>1?' +'+(b.g-1):'')+(b.t?' \u270E':''):'&nbsp;';
+      h+=`<div class="pill ${b.p} ${st?'s':''} ${en?'e':''} ${b.x?'x':''}" title="${esc(b.n+' | '+b.p+(b.t?' | '+b.t:''))}" onclick="event.stopPropagation();showB('${b.id}')">${lbl}</div>`;
+    });
+    h+='</div>';
+  });
+  $('cal').innerHTML=sel?h:'<p class="note" style="grid-column:1/-1">Add a listing on the left to start.</p>';
+}
+function drawFin(){
+  const ls=$('fl'),keep=ls.value||'all';
+  ls.innerHTML='<option value="all">All listings</option>'+S.l.map(l=>`<option value="${l.id}">${esc(l.name)}</option>`).join('');ls.value=S.l.find(l=>l.id===keep)?keep:'all';
+  const ok=o=>ls.value==='all'||o.l===ls.value, key=cur.getFullYear()+'-'+pad(cur.getMonth()+1);
+  const inc=S.b.filter(b=>ok(b)&&b.m>0), exp=(S.x||[]).filter(ok), mi=inc.filter(b=>b.s.startsWith(key)).sort((a,b)=>a.s<b.s?-1:1), me=exp.filter(x=>x.d.startsWith(key)).sort((a,b)=>a.d<b.d?-1:1);
+  const ti=mi.reduce((s,b)=>s+b.m,0),te=me.reduce((s,x)=>s+x.a,0);
+  $('s-in').textContent=fmt(ti);$('s-out').textContent=fmt(te);$('s-pl').textContent=fmt(ti-te);$('s-pl').className=ti-te>=0?'in':'out';
+  $('t-inc').innerHTML='<tr><th>Check-in</th><th>Guest</th><th>Listing</th><th>Via</th><th class="n">Earnings</th></tr>'+(mi.map(b=>`<tr><td>${b.s}</td><td>${esc(b.n)}</td><td>${esc(LN(b.l))}</td><td>${b.p}</td><td class="n in">${fmt(b.m)}</td></tr>`).join('')||'<tr><td colspan="5" class="note">No earnings recorded this month. Add them on the booking.</td></tr>');
+  $('t-exp').innerHTML='<tr><th>Date</th><th>Category</th><th>Listing</th><th>Note</th><th class="n">Amount</th>'+(V?'':'<th></th>')+'</tr>'+(me.map(x=>`<tr><td>${x.d}</td><td>${esc(x.c)}</td><td>${esc(LN(x.l))}</td><td>${esc(x.n)}</td><td class="n out">${fmt(x.a)}</td>${V?'':`<td><button onclick="delX('${x.id}')">&times;</button></td>`}</tr>`).join('')||'<tr><td colspan="6" class="note">No expenses this month.</td></tr>');
+  $('yt').textContent='Profit & loss '+cur.getFullYear();
+  let h='<tr><th>Month</th><th class="n">Earnings</th><th class="n">Expenses</th><th class="n">Profit</th></tr>',Ti=0,Te=0;
+  for(let i=0;i<12;i++){const k=cur.getFullYear()+'-'+pad(i+1),a=inc.filter(b=>b.s.startsWith(k)).reduce((s,b)=>s+b.m,0),e=exp.filter(x=>x.d.startsWith(k)).reduce((s,x)=>s+x.a,0);Ti+=a;Te+=e;
+    h+=`<tr><td>${new Date(2000,i,1).toLocaleDateString('en-US',{month:'long'})}</td><td class="n">${fmt(a)}</td><td class="n">${fmt(e)}</td><td class="n ${a-e>=0?'in':'out'}">${fmt(a-e)}</td></tr>`}
+  $('t-yr').innerHTML=h+`<tr><th>Total</th><th class="n">${fmt(Ti)}</th><th class="n">${fmt(Te)}</th><th class="n">${fmt(Ti-Te)}</th></tr>`;
+}
+
+// ---- bookings ----
+const lopts=()=>S.l.map(l=>`<option value="${l.id}">${esc(l.name)}</option>`).join('');
+function openB(id,date){
+  if(!S.l.length)return alert('Add a listing first.');
+  const b=id?S.b.find(x=>x.id===id):null;editB=id||null;
+  $('b-l').innerHTML=lopts();$('bt').textContent=b?'Edit booking':'Add booking';
+  $('b-l').value=b?b.l:sel;$('b-p').value=b?b.p:'Airbnb';$('b-n').value=b?b.n:'';
+  $('b-s').value=b?b.s:date||'';$('b-e').value=b?b.e:date?addD(date,1):'';
+  $('b-g').value=b?b.g:1;$('b-m').value=b&&b.m?b.m:'';$('b-t').value=b?b.t||'':'';
+  $('b-del').classList.toggle('hide',!b);bd.showModal();
+}
+function saveB(){
+  const r={id:editB||uid(),l:$('b-l').value,p:$('b-p').value,n:$('b-n').value.trim(),s:$('b-s').value,e:$('b-e').value,g:Math.max(1,parseInt($('b-g').value)||1),m:parseFloat($('b-m').value)||0,t:$('b-t').value.trim()};
+  if(!r.n||!r.s||!r.e||r.e<=r.s)return alert('Enter the guest name and valid dates (check-out after check-in).');
+  const clash=S.b.find(o=>o.id!==r.id&&o.l===r.l&&r.s<o.e&&o.s<r.e);
+  if(clash&&!confirm('This overlaps '+clash.n+' ('+clash.s+' to '+clash.e+') on the same listing. Save anyway?'))return;
+  const i=S.b.findIndex(x=>x.id===r.id);i>=0?S.b[i]=r:S.b.push(r);
+  sel=r.l;save();bd.close();draw();
+}
+function delB(){if(confirm('Delete this booking?')){S.b=S.b.filter(b=>b.id!==editB);save();bd.close();draw()}}
+function showB(id){
+  const b=S.b.find(x=>x.id===id);
+  $('dc').innerHTML=`<h3 style="margin:0 0 4px">${esc(b.n)}</h3><p class="note" style="display:inline-block;margin:0 0 10px">${esc(b.p)} &middot; ${esc(LN(b.l))}</p>
+  <p><b>${b.s}</b> to <b>${b.e}</b> (${nights(b.s,b.e)} nights)<br>${b.g} guest${b.g>1?'s':''}</p>
+  ${V==='c'?'':b.m?`<p>Earnings: <b>${fmt(b.m)}</b></p>`:V?'':'<p style="color:var(--mut)">No earnings added yet.</p>'}
+  <p style="white-space:pre-wrap">${b.t?'<b>Notes:</b> '+esc(b.t):'<span style="color:var(--mut)">No notes.</span>'}</p>`;
+  $('d-edit').onclick=()=>{dd.close();openB(id)};dd.showModal();
+}
+
+// ---- expenses ----
+function openX(){if(!S.l.length)return alert('Add a listing first.');$('x-l').innerHTML=lopts();$('x-l').value=sel;$('x-d').value=ymd(new Date());xd.showModal()}
+function saveX(){
+  const a=parseFloat($('x-a').value),d=$('x-d').value;if(!(a>0)||!d)return alert('Enter a date and an amount above 0.');
+  (S.x=S.x||[]).push({id:uid(),l:$('x-l').value,d,a,c:$('x-c').value.trim()||'Other',n:$('x-n').value.trim()});
+  $('x-a').value='';$('x-n').value='';save();xd.close();draw();
+}
+function delX(id){if(confirm('Delete this expense?')){S.x=S.x.filter(x=>x.id!==id);save();draw()}}
+
+// ---- export table as PNG ----
+function openExport(){
+  $('e-l').innerHTML='<option value="all">All listings</option>'+lopts();$('e-l').value=sel||'all';
+  $('e-mv').value=cur.getFullYear()+'-'+pad(cur.getMonth()+1);$('e-f').value=$('e-t').value=ymd(new Date());
+  $('e-$').checked=false;ed.showModal();drawEx();
+}
+function range(){
+  if($('e-m').value==='month'){const v=$('e-mv').value||ymd(new Date()).slice(0,7),[y,m]=v.split('-').map(Number);return[v+'-01',ymd(new Date(y,m,1)),new Date(y,m-1,1).toLocaleDateString('en-US',{month:'long',year:'numeric'})]}
+  const f=$('e-f').value,t=$('e-t').value||f;return[f,addD(t,1),f+' to '+t];
+}
+function wrap(ctx,t,w){const out=[];let line='';for(const word of String(t).split(/\s+/)){const x=line?line+' '+word:word;if(ctx.measureText(x).width>w&&line){out.push(line);line=word}else line=x}out.push(line);return out}
+let exCanvas=null;
+function drawEx(){
+  $('e-cu').classList.toggle('hide',$('e-m').value!=='custom');$('e-mo').classList.toggle('hide',$('e-m').value!=='month');
+  const lid=$('e-l').value,money=$('e-$').checked&&V!=='c'&&!!$('e-$').offsetParent||($('e-$').checked&&!V||$('e-$').checked&&V==='f');
+  const [from,to,label]=range(),ids=lid==='all'?S.l.map(l=>l.id):[lid];
+  const rows=S.b.filter(b=>ids.includes(b.l)&&b.s<to&&b.e>from).sort((a,b)=>a.s<b.s?-1:a.s>b.s?1:0);
+  const cols=[['Check-in',100],['Check-out',100],['Nights',60],['Guest',190],['Via',110],['Guests',64]];
+  if(lid==='all')cols.splice(3,0,['Listing',150]);if(money)cols.push(['Earnings',130]);
+  const W=1300,fixed=cols.reduce((s,c)=>s+c[1],0),nw=W-fixed-40;cols.splice(cols.length-(money?1:0),0,['Notes',nw]);
+  const F='14px system-ui,sans-serif',m=document.createElement('canvas').getContext('2d');m.font=F;
+  const val=b=>({'Check-in':b.s,'Check-out':b.e,'Nights':nights(b.s,b.e),'Listing':LN(b.l),'Guest':b.n,'Via':b.p,'Guests':b.g,'Notes':b.t||'','Earnings':fmt(b.m)});
+  const lines=rows.map(b=>Math.min(3,wrap(m,b.t||'',nw-12).length)),rh=lines.map(n=>14+n*19);
+  const H=90+36+rh.reduce((s,x)=>s+x,0)+(money?40:0)+30+(rows.length?0:50), c=document.createElement('canvas');
+  c.width=W*2;c.height=H*2;const x=c.getContext('2d');x.scale(2,2);x.fillStyle='#fff';x.fillRect(0,0,W,H);
+  x.fillStyle='#222';x.font='bold 24px system-ui,sans-serif';x.fillText((lid==='all'?'All listings':LN(lid))+' \u2013 bookings',20,38);
+  x.font='15px system-ui,sans-serif';x.fillStyle='#717171';x.fillText(label+'  |  '+rows.length+' booking'+(rows.length===1?'':'s'),20,62);
+  let y=80;x.fillStyle='#f3f3f3';x.fillRect(20,y,W-40,36);x.fillStyle='#222';x.font='bold 14px system-ui,sans-serif';
+  let cx=20;const pos={};cols.forEach(([n,w])=>{pos[n]=[cx,w];x.fillText(n,cx+8,y+23);cx+=w});y+=36;
+  const col={Airbnb:'#FF5A5F','Booking.com':'#003580',Direct:'#059669'};
+  rows.forEach((b,i)=>{
+    const v=val(b);x.font=F;x.fillStyle='#222';
+    cols.forEach(([n])=>{const [px,w]=pos[n];
+      if(n==='Via'){x.fillStyle=col[b.p];x.beginPath();x.roundRect(px+6,y+7,w-16,24,12);x.fill();x.fillStyle='#fff';x.font='bold 13px system-ui,sans-serif';x.fillText(b.p,px+14,y+24);x.font=F;x.fillStyle='#222'}
+      else if(n==='Notes'){wrap(x,v[n],w-12).slice(0,3).forEach((t,j)=>x.fillText(t,px+8,y+24+j*19))}
+      else{x.textAlign=n==='Earnings'?'right':'left';x.fillText(String(v[n]),n==='Earnings'?px+w-8:px+8,y+24);x.textAlign='left'}});
+    y+=rh[i];x.fillStyle='#e5e5e5';x.fillRect(20,y-1,W-40,1);
+  });
+  if(!rows.length){x.fillStyle='#717171';x.fillText('No bookings in this period.',28,y+30);y+=50}
+  if(money){const t=rows.reduce((s,b)=>s+b.m,0);x.font='bold 15px system-ui,sans-serif';x.fillStyle='#222';x.textAlign='right';x.fillText('Total '+fmt(t),W-28,y+26);x.textAlign='left'}
+  exCanvas=c;$('e-img').src=c.toDataURL('image/png');
+}
+function dlEx(){if(!exCanvas)return;exCanvas.toBlob(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='bookings-'+range()[0]+'.png';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)})}
+
+// ---- backup ----
+function backup(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));a.download='rental-backup-'+ymd(new Date())+'.json';a.click()}
+function restore(el){const f=el.files[0];if(!f)return;f.text().then(t=>{try{const d=JSON.parse(t);if(!Array.isArray(d.l)||!Array.isArray(d.b))throw 0;if(!confirm('Replace all current data with this backup?'))return;S={l:d.l,b:d.b,x:d.x||[]};save();draw()}catch(e){alert('That file is not a valid backup.')}el.value=''})}
+
+// ---- start ----
+(async()=>{
+  const h=location.hash.slice(1);
+  if(h.startsWith('c=')||h.startsWith('f=')){try{S=await unpack(h.slice(2));S.x=S.x||[];V=h[0]}catch(e){alert('This link is damaged or incomplete. Ask for a new one.')}}
+  draw();
+})();
+</script>
+</body>
+</html>
